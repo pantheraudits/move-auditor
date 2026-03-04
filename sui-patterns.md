@@ -246,6 +246,263 @@ struct HotPotato { value: u64 }  // no abilities
 
 ---
 
+## SUI-11 — Entry Modifier Visibility Bypass
+
+**Description:** A `public(package) entry` function is callable directly from transactions, bypassing the intended package-only visibility. The `entry` modifier overrides `public(package)` restrictions for direct invocation.
+
+**Pattern:**
+```move
+// VULNERABLE — entry modifier makes this callable by anyone via transaction
+public(package) entry fun emergency_withdraw(
+    v: &mut Vault,
+    ctx: &TxContext
+) {
+    v.withdrawals = v.withdrawals + 1;
+    v.admin = tx_context::sender(ctx); // attacker becomes admin!
+}
+
+// SAFE — without entry, only callable from within the package
+public(package) fun emergency_withdraw_secure(
+    v: &mut Vault,
+    ctx: &TxContext
+) {
+    v.withdrawals = v.withdrawals + 1;
+    v.admin = tx_context::sender(ctx);
+}
+```
+
+**Check:**
+1. Audit every `public(package) entry` function — the `entry` modifier means anyone can call it directly
+2. If a function is meant to be package-internal only, remove the `entry` modifier
+3. If the `entry` modifier is needed, add explicit authorization checks (admin/capability)
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — access_control_1*
+
+---
+
+## SUI-12 — Caller Address as Parameter (Spoofable Sender)
+
+**Description:** Functions that accept a caller/sender address as a parameter instead of deriving it from `TxContext`. Anyone can pass any address.
+
+**Pattern:**
+```move
+// VULNERABLE — caller address is user-supplied, anyone can claim to be admin
+public fun withdraw_all(
+    v: &mut Vault,
+    caller: address,    // attacker passes v.admin address here
+) {
+    assert!(caller == v.admin, E_NOT_ADMIN);
+    v.balance = 0;
+}
+
+// SAFE — derive sender from TxContext, cannot be spoofed
+public fun withdraw_all(
+    v: &mut Vault,
+    ctx: &TxContext,
+) {
+    let caller = tx_context::sender(ctx);
+    assert!(caller == v.admin, E_NOT_ADMIN);
+    v.balance = 0;
+}
+```
+
+**Check:**
+1. Flag any function that accepts an `address` parameter used for authorization
+2. Sender identity must always come from `tx_context::sender(ctx)`
+3. Especially dangerous in `public` or `public(package)` functions
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — access_control_2*
+
+---
+
+## SUI-13 — Phantom Type Generic Role Bypass
+
+**Description:** Role-based capability checks using generic type parameters instead of concrete types. A user holding `RoleCap<UserRole>` can pass it where `RoleCap<ModRole>` or `RoleCap<AdminRole>` was intended.
+
+**Pattern:**
+```move
+public struct RoleCap<phantom R> has key { id: UID, owner: address }
+public struct UserRole has drop {}
+public struct AdminRole has drop {}
+
+// VULNERABLE — generic R accepts ANY RoleCap, not just ModRole
+public fun moderator_checkout_admin<R>(
+    _cap: &RoleCap<R>,          // any user with RoleCap<UserRole> passes this
+    ctx: &mut TxContext,
+) {
+    let admin_cap = RoleCap<AdminRole> { id: object::new(ctx), owner: tx_context::sender(ctx) };
+    transfer::transfer(admin_cap, tx_context::sender(ctx));
+}
+
+// SAFE — concrete type enforces only ModRole holders can call
+public fun moderator_checkout_admin(
+    _cap: &RoleCap<ModRole>,    // only RoleCap<ModRole> accepted
+    ctx: &mut TxContext,
+) {
+    let admin_cap = RoleCap<AdminRole> { id: object::new(ctx), owner: tx_context::sender(ctx) };
+    transfer::transfer(admin_cap, tx_context::sender(ctx));
+}
+```
+
+**Check:**
+1. Flag any function with generic type parameter on capability structs (e.g., `<R>` in `RoleCap<R>`)
+2. Role-gated functions must use concrete types, not generics
+3. Verify that `sign_up` / public minting only creates the lowest-privilege capability
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — access_control_3*
+
+---
+
+## SUI-14 — Table Key Collision (Duplicate Key Abort)
+
+**Description:** Using `table::add` without checking if the key already exists causes an abort on duplicate entries. This can DoS users trying to deposit/interact a second time.
+
+**Pattern:**
+```move
+// VULNERABLE — aborts on second deposit for the same user
+public fun deposit(bank: &mut Bank, user: address, amount: u64) {
+    table::add(&mut bank.balances, user, amount); // aborts if key exists!
+}
+
+// SAFE — insert-or-update pattern
+public fun deposit(bank: &mut Bank, user: address, amount: u64) {
+    if (!table::contains(&bank.balances, user)) {
+        table::add(&mut bank.balances, user, amount);
+    } else {
+        let bal = table::borrow_mut(&mut bank.balances, user);
+        *bal = *bal + amount;
+    }
+}
+```
+
+**Check:**
+1. Every `table::add` call must be preceded by a `table::contains` check or be guaranteed first-time-only
+2. Same applies to `bag::add`, `object_bag::add`, `object_table::add`
+3. Also check `table::remove` / `table::borrow` without existence checks — they abort on missing keys
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — tables_1*
+
+---
+
+## SUI-15 — Unbounded Iteration DoS
+
+**Description:** Loops over vectors or tables with user-controlled size. Attackers can grow the data structure until iteration exceeds gas limits, bricking the function.
+
+**Pattern:**
+```move
+// VULNERABLE — iterates over entire vector, size controlled by users
+public fun reward_all(lb: &mut Leaderboard) {
+    let len = vector::length(&lb.scores);
+    let mut i = 0;
+    while (i < len) {
+        let s = vector::borrow_mut(&mut lb.scores, i);
+        *s = *s + 1;
+        i = i + 1;
+    }
+}
+
+// SAFE — paginated iteration with bounded range
+public fun reward_batch(lb: &mut Leaderboard, start: u64, count: u64) {
+    let len = vector::length(&lb.scores);
+    let end = math::min(start + count, len);
+    let mut i = start;
+    while (i < end) {
+        let s = vector::borrow_mut(&mut lb.scores, i);
+        *s = *s + 1;
+        i = i + 1;
+    }
+}
+```
+
+**Check:**
+1. Flag any `while` or loop that iterates over a vector/table whose size is user-controlled
+2. Verify there are caps on how large user-controlled collections can grow
+3. Prefer paginated/batched patterns for operations on unbounded collections
+4. Check `vector::push_back` calls — is the vector size capped?
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — tables_2*
+
+---
+
+## SUI-16 — Timestamp Unit Confusion (ms vs seconds)
+
+**Description:** `clock::timestamp_ms()` returns milliseconds but code compares it against constants defined in seconds (or vice versa), breaking time-based locks.
+
+**Pattern:**
+```move
+const LOCK_TIME_SECONDS: u64 = 10 * 24 * 60 * 60; // 10 days in seconds
+
+// VULNERABLE — stores ms/1000 in stake, but compares raw ms against seconds constant
+public entry fun stake(state: &mut StakeState, clock: &Clock, _ctx: &mut TxContext) {
+    state.seconds = clock::timestamp_ms(clock) / 1000;  // converted to seconds
+    // ...
+}
+
+public entry fun unstake(state: &mut StakeState, clock: &Clock, _ctx: &mut TxContext) {
+    let now = clock::timestamp_ms(clock);  // raw milliseconds!
+    // BUG: comparing ms against (seconds + seconds) — lock is effectively instant
+    if (now >= state.seconds + LOCK_TIME_SECONDS) {
+        // unlocks immediately because now_ms >> saved_seconds + lock_seconds
+    }
+}
+
+// SAFE — consistent units throughout
+public entry fun unstake(state: &mut StakeState, clock: &Clock, _ctx: &mut TxContext) {
+    let now_seconds = clock::timestamp_ms(clock) / 1000;
+    if (now_seconds >= state.stake_time_seconds + LOCK_TIME_SECONDS) {
+        // correct comparison: seconds vs seconds
+    }
+}
+```
+
+**Check:**
+1. Every use of `clock::timestamp_ms()` — verify the result is used consistently (all ms or all seconds)
+2. Check constant names vs actual units (e.g., `LOCK_TIME_SECONDS` used with ms values)
+3. Flag mixed arithmetic: ms values compared/added to second values
+4. Verify struct field names match the units stored in them
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — time_units*
+
+---
+
+## SUI-17 — Hot Potato State Reset (Nested Flash Loan Attack)
+
+**Description:** Hot potato flash loan patterns where calling `start` multiple times resets the saved snapshot, or where `finish` doesn't actually enforce the return of funds.
+
+**Pattern:**
+```move
+public fun start_harvest(vault: &mut Vault, ctx: &TxContext): HarvestOp {
+    vault.saved_reserves = vault.reserves;  // snapshot resets each call!
+    vault.operation_in_progress = true;
+    HarvestOp {}
+}
+
+// VULNERABLE — finish accepts returned_amount as parameter but doesn't deposit it
+public fun finish_harvest(vault: &mut Vault, op: HarvestOp, returned_amount: u64, ctx: &TxContext) {
+    let required = vault.saved_reserves * MIN_RETURN_BPS / BPS_DENOM;
+    assert!(returned_amount >= required, EInsufficientReturn);
+    // BUG: returned_amount is just a number — no actual funds transferred back!
+    vault.operation_in_progress = false;
+    let HarvestOp {} = op;
+}
+```
+
+**Attack flow:**
+1. Call `start_harvest` → snapshot = 1000, withdraw 900
+2. Call `start_harvest` again → snapshot resets to 100 (current reserves)
+3. Call `finish_harvest` with `returned_amount = 98` → passes 98% check on 100
+4. Attacker keeps 900, vault lost funds
+
+**Check:**
+1. `start` function must assert no operation is already in progress (`!operation_in_progress`)
+2. Hot potato struct should store the snapshot amount, not the vault
+3. `finish` must verify actual token balances, not trust a user-supplied amount parameter
+4. Verify the hot potato cannot be created multiple times in the same PTB
+
+*Source: [Monethic/sui-vuln-lab](https://github.com/Monethic/sui-vuln-lab) — hot_potato*
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -258,3 +515,10 @@ struct HotPotato { value: u64 }  // no abilities
 - [ ] Hot potato flash loans tested for abort-safety
 - [ ] TreasuryCap access-controlled
 - [ ] Events not trusted as primary source of truth by critical systems
+- [ ] No `public(package) entry` functions without explicit auth checks (SUI-11)
+- [ ] No address parameters used for authorization — sender derived from TxContext (SUI-12)
+- [ ] No generic type params on capability-gated functions — concrete types only (SUI-13)
+- [ ] All `table::add` / `bag::add` calls guarded by existence checks (SUI-14)
+- [ ] No unbounded loops over user-controlled vectors/tables (SUI-15)
+- [ ] Timestamp units consistent — no ms/seconds mixing (SUI-16)
+- [ ] Hot potato `start` functions assert no operation already in progress (SUI-17)
