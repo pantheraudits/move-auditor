@@ -42,11 +42,6 @@ mkdir -p ~/.cursor/skills
 cp -r move-auditor ~/.cursor/skills/move-auditor
 ```
 
-**Via LobeHub market CLI:**
-```bash
-npx -y @lobehub/market-cli skills install pantheraudits-move-auditor
-```
-
 ---
 
 ## Usage
