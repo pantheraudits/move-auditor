@@ -10,8 +10,6 @@ metadata:
     - sui
     - aptos
     - smart-contract-audit
-    - blockchain-security
-    - defi-security
     - web3-security
 ---
 
