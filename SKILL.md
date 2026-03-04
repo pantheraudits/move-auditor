@@ -1,6 +1,6 @@
 ---
 name: move-auditor
-description: Audits Move contracts (Sui & Aptos) for security bugs. Auto-activates on .move files.
+description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
   version: "1.0.0"
   author: pantheraudits
