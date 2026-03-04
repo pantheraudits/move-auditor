@@ -39,19 +39,31 @@ cp -r move-auditor ~/.cursor/skills/move-auditor
 
 ## Usage
 
-The skill **auto-activates** when `.move` files are present or when you ask about Move security. It will:
+> **Important:** `/move-auditor` is a slash command inside Claude Code — not a terminal command.
+> You must run it from within a Claude Code session, not from your shell (zsh/bash).
+
+### Quick start
+
+1. Open your terminal and navigate to your Move project:
+   ```bash
+   cd /path/to/your-move-project
+   ```
+2. Start a Claude Code session:
+   ```bash
+   claude
+   ```
+3. Inside the Claude Code session, run the slash command:
+   ```
+   /move-auditor         # Full audit of all .move files in scope
+   /move-auditor [file]  # Audit a specific file
+   ```
+
+The skill also **auto-activates** when `.move` files are present or when you ask about Move security. It will:
 
 1. Detect chain (Sui or Aptos) automatically
 2. Map the codebase structure
 3. Run a full vulnerability scan
 4. Produce a structured audit report with severity, location, PoC scenario, and fix
-
-You can also invoke it explicitly:
-
-```
-/move-auditor         # Full audit of all .move files in scope
-/move-auditor [file]  # Audit a specific file
-```
 
 ---
 
