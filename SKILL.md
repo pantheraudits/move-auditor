@@ -1,9 +1,6 @@
 ---
 name: move-auditor
-description: >
-  Security auditor for Move smart contracts on Sui and Aptos.
-  Finds vulnerabilities in access control, arithmetic, resource safety,
-  object model, and DeFi logic. Auto-activates on .move files.
+description: Audits Move contracts (Sui & Aptos) for security bugs. Auto-activates on .move files.
 metadata:
   version: "1.0.0"
   author: pantheraudits

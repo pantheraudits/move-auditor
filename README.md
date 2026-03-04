@@ -10,14 +10,7 @@
 
 ## What is this?
 
-A structured Claude Code / Cursor skill that gives **fast, automatic security feedback** on Move smart contracts as you develop or audit. No prompts to copy-paste, no placeholders to fill.
-
-When you open a `.move` file or ask Claude to review Move code, the skill activates and runs a systematic audit covering:
-
-- **Common Move vulnerabilities** — access control, arithmetic, resource safety, logic errors
-- **Sui-specific patterns** — object ownership, shared object reentrancy, witness abuse, dynamic fields, hot potato misuse
-- **Aptos-specific patterns** — resource accounts, coin type confusion, table safety, module upgrades, `acquires` correctness
-- **DeFi attack vectors** — oracle manipulation, flash loans, AMM manipulation, liquidation bugs, slippage, governance attacks
+A Claude Code / Cursor skill that auto-audits Move smart contracts when you open `.move` files. Covers common Move bugs, Sui-specific patterns (SUI-01–10), Aptos-specific patterns (APT-01–11), and DeFi attack vectors (DEFI-01–10).
 
 ---
 
