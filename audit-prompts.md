@@ -209,3 +209,163 @@ Use them for focused deep-dives after the initial scan.
 
 - "Trace the complete liquidation flow from health check to collateral seizure. At each step, verify: (a) the correct variable is passed (debt amount vs collateral amount), (b) solvency is checked AFTER withdrawal/repayment, (c) liquidation cannot be blocked by cooldowns or paused states, (d) remaining collateral is returned to the user, not destroyed."
 - "For every `withdraw` function in a lending protocol: is there a solvency check AFTER the withdrawal amount is deducted? Can a user withdraw collateral while their position is underwater?"
+
+---
+
+## Audit Methodology — Rules & Heuristics
+
+Core audit rules and thinking heuristics. Apply these throughout every review
+alongside the pattern-specific checks above.
+
+### 1. Trust Model
+
+- **Admin is trusted** — check the specs/docs for which roles are trusted.
+  Don't report findings based on trusted actors acting maliciously. However,
+  **logic bugs in admin actions are valid findings** — if an admin function
+  has a code bug that causes unintended behavior, that's reportable.
+- **Defense in Depth:** Assume any privileged account can be compromised.
+  Evaluate blast radius — can a compromised admin rug the entire protocol?
+  Can they drain all funds in one transaction, or are there timelocks/limits?
+- **Principle of Least Privilege:** No actor should have more power than needed.
+  If a value can be read on-chain, a function shouldn't accept it as an
+  arbitrary parameter. If a function only needs read access, it shouldn't
+  take `&mut`.
+
+### 2. Asymmetry Detection
+
+This is one of the highest-signal audit techniques. Open similar functions
+side by side and compare line by line.
+
+**Compare these pairs:**
+- `deposit` vs `withdraw`
+- `buy` vs `sell`
+- `mint` vs `burn`
+- `borrow` vs `repay`
+- `stake` vs `unstake`
+- User version vs admin version of the same action (e.g., user redemption vs force redemption)
+
+**What to look for:**
+- A check present in one function but missing in its counterpart
+- One function uses an oracle/on-chain value; its counterpart accepts an arbitrary parameter
+- Different rounding directions that should be symmetric (or asymmetric for protocol safety)
+- Admin functions are underrepresented in testing and frequently contain critical bugs —
+  devs focus on user flows and neglect admin flows
+
+**Bad symmetry (defensive code as a vulnerability):**
+A safety check duplicated from a "prepare" function into a "redeem/claim" function
+can cause permanent DoS if the prepare step already decremented the counter to zero.
+Too-restrictive checks can brick functionality — defensive code can itself be a
+critical vulnerability.
+
+### 3. State Variable Deep Dive
+
+- **Enumerate all state variables** (struct fields in `key` resources, shared objects,
+  table entries). For each one:
+  - Where is it written? Is it updated correctly at every mutation point?
+  - Can an attacker manipulate it to reach an exploitable state?
+  - Is it ever read after a mutation in the same function without refresh?
+- **Setter/update functions:** When a setter changes a state variable, does it
+  retroactively impact any live instance? E.g., changing a fee rate mid-epoch
+  that affects already-accrued rewards, or updating an address without
+  reclaiming tokens/allowances from the old one.
+- **Coding pattern present everywhere except one place:** If a state update
+  pattern (e.g., `update_rewards()` before balance change) appears in 9 out
+  of 10 functions, the missing 10th instance is likely a bug.
+
+### 4. Constants & Formulas
+
+- For every `const` defined in the contract: check if it's defined correctly,
+  check its usage in the code. Is it logically correct? Is it technically
+  implemented correctly? The formulas and math where it's used — are they
+  correct or do they have bugs?
+- **Copy-paste errors:** When you see similar constants, hashes, or IDs,
+  verify they're actually different. Search for duplicate values across the
+  codebase with grep.
+- See `common-move.md` section 8.4 for specific constant bugs from real audits.
+
+### 5. Input Validation & Edge Cases
+
+- **Check for these edge-case inputs on every public/entry function:**
+  - Zero values (`amount = 0`) — does it corrupt state, skip logic, or divide-by-zero downstream?
+  - Very small values (1 unit) — dust attacks, rounding exploits
+  - Very large values (near MAX_U64) — overflow in multiplication
+  - Empty vectors/lists — loop bypass: if a `while` loop iterates over a user-supplied
+    vector and returns a result, what happens with an empty vector? The loop is skipped
+    and may return a default value (e.g., `true`) that bypasses validation.
+  - Identical inputs (same address for sender and recipient, same coin for both sides of a swap)
+  - Unvalidated object/address references — can a user pass a malicious object that
+    implements the expected struct layout?
+- **Do functions validate that token/coin types actually belong to the protocol?**
+  Can a user pass in a worthless self-created coin type?
+- **Many small ops vs one large op:** Do many small deposits/withdrawals produce
+  the same end state as one large one? If not, there's a bug (rounding, fees,
+  state corruption). This is a powerful black-box testing technique.
+
+### 6. Arithmetic & Precision
+
+- **Casting bugs:** Casting a `u128` to `u64` truncates silently. Multiplying
+  two `u64` values and storing in `u64` overflows even if the result is assigned
+  to a `u128` later — must cast *before* multiplying.
+- **Precision annotation technique:** For each variable in a formula, annotate
+  its decimal precision (e.g., `// 6 decimals`, `// 18 decimals`, `// RAY = 27`).
+  Look for addition/subtraction between variables of different precision.
+  Common pattern: protocol uses internal precision (e.g., 18 decimals) but
+  interacts with tokens of different precision (e.g., USDC 6 decimals) —
+  look for missing or incorrect conversion.
+- **Off-by-one errors:** `<` vs `<=`, especially with slightly different checks
+  in different functions. Compare boundary conditions across all functions that
+  reference the same threshold.
+
+### 7. Look for What's Missing
+
+**Missing checks are harder to spot than incorrect ones.** Train yourself to
+notice absence:
+
+- Missing access control on a privileged function
+- Missing solvency check after withdrawal
+- Missing existence check before table access
+- Missing state update after claim/refund
+- Missing fee withdrawal function (locked funds)
+- Missing pause mechanism (no emergency brake)
+- Missing minimum amount check (enables dust/1-wei attacks — recommend protocols
+  implement minimums to cut off these vectors)
+- Missing duplicate check when adding to a list (duplicates can break downstream logic)
+- Missing slippage protection on any function that interacts with AMM pools
+  (especially admin functions like unpause, setPositionWidth, rebalance)
+- Missing reclamation when updating an address (if a function updates an external
+  contract address, does it first reclaim tokens from the old address?)
+- Missing decimal adjustment when changing a token address (if a function allows
+  changing a token, does the new token have different decimals? Will that corrupt
+  internal accounting?)
+
+### 8. Unchecked Return Values
+
+- Functions that return `bool` instead of aborting on failure — do callers check
+  the return value? In Move, most operations abort on failure, but custom functions
+  may return `bool` or `Option` to indicate success/failure.
+- Check all cross-module calls: is the return value validated before being used
+  in critical logic?
+- Especially dangerous: functions that return `(bool, u64)` where the caller
+  uses the `u64` without checking the `bool`.
+
+### 9. Black-Box Testing Mindset
+
+- Code up scenarios with known expected inputs, outputs, and state changes.
+  Run them mentally (or write test cases) and see if actual results match.
+  Reverse-engineer the bug location from unexpected outputs.
+- **Gaps in test suite:** Look for untested interactions between modules,
+  edge cases not covered, and paths that are only tested with happy-case inputs.
+- **Use the protocol as an attacker would:** Try to construct a sequence of
+  transactions that reaches an invalid state. Think in PTBs (Sui) or
+  multi-step transactions (Aptos).
+
+### 10. Beyond the Checklist
+
+The rules above cover known patterns. But the highest-value findings often come
+from areas NOT on any checklist. Use your experience and imagination:
+
+- **Explore all possible paths** — check every single line and all flows
+- **Question every assumption** the developer made
+- **Think about what the code does, not what it's supposed to do**
+- **Read the code as if you've never seen it before** — fresh eyes catch
+  what familiarity blinds you to
