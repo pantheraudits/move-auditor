@@ -41,9 +41,9 @@ file in this skill's directory (e.g., if SKILL.md is at
 
 | File | When to load |
 |------|-------------|
-| `common-move.md` | **Always** — chain-agnostic checks, verification checklist, prompt pack |
-| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-17 |
-| `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) |
+| `common-move.md` | **Always** — chain-agnostic checks (sections 1–10), verification checklist |
+| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-20 |
+| `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-14 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles |
 | `audit-prompts.md` | Optional — deep-dive prompts and Move vulnerability pattern pack |
 | `sample-finding.md` | Reference for output format — do not load during audits |

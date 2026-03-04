@@ -95,6 +95,8 @@ valuable assets against it. Classic DeFi attack.
 3. Price oracles must reject unrecognized coin types
 4. `coin::value()` on an unregistered type aborts — but whitelisting should happen before that
 
+*See also: `common-move.md` 8.1 for the general generic type validation pattern*
+
 ---
 
 ## APT-04 — Signer Capability Abuse (via `create_signer_with_capability`)
@@ -249,6 +251,126 @@ public entry fun process_all(admin: &signer) acquires UserList {
 
 ---
 
+## APT-12 — Test / Debug Functions as Privilege Escalation
+
+**Description:** Functions intended for testing that are left accessible in production. Unlike `#[test_only]` functions (which the compiler strips), these are regular `public` functions with names like `test_mint`, `debug_set_admin`, or helper functions that bypass normal access control.
+
+**Pattern:**
+```move
+// VULNERABLE — test helper left in production, anyone gets admin
+public fun test_create_admin(account: &signer): AdminCap {
+    // No #[test_only] attribute! Callable in production
+    AdminCap { signer_cap: account::create_test_signer_cap(signer::address_of(account)) }
+}
+
+// VULNERABLE — init-like function without one-time guard
+public entry fun setup_for_testing(admin: &signer) {
+    // Meant for tests but callable by anyone — reinitializes protocol
+    move_to(admin, Config { fee: 0, admin: signer::address_of(admin) });
+}
+```
+
+**Check:**
+1. Search for functions with `test`, `debug`, `mock`, `setup` in names — are they `#[test_only]`?
+2. Any function that creates admin capabilities or signers outside of `init` — is it restricted?
+3. Check for `public` functions that set storage directly without access control
+4. Verify `#[test_only]` attribute is present on ALL test helper functions and modules
+
+*Real audit ref: Multiple protocols (test code not restricted with #[test_only],
+anyone gains admin privileges — Critical)*
+
+---
+
+## APT-13 — FungibleAsset Zero-Value Manipulation
+
+**Description:** Zero-value operations on `FungibleAsset` that corrupt counters, bypass limits, or manipulate investor tracking.
+
+**Pattern:**
+```move
+// VULNERABLE — zero-value withdrawal increments counter, blocking real withdrawals
+public fun withdraw_fa(
+    store: &mut FungibleStore,
+    amount: u64,
+    account: &signer
+) acquires WithdrawTracker {
+    let tracker = borrow_global_mut<WithdrawTracker>(signer::address_of(account));
+    tracker.withdraw_count = tracker.withdraw_count + 1;  // increments even for amount=0
+    // If max_withdrawals is 3, attacker sends 3 zero-value txs to block real withdrawals
+    assert!(tracker.withdraw_count <= MAX_WITHDRAWALS, E_LIMIT_REACHED);
+    fungible_asset::withdraw(account, store, amount);
+}
+
+// VULNERABLE — zero-value burn decrements investor count
+public fun burn_fa(store: &mut FungibleStore, amount: u64) acquires InvestorTracker {
+    let tracker = borrow_global_mut<InvestorTracker>(@protocol);
+    tracker.investor_count = tracker.investor_count - 1;  // decrements even for amount=0!
+    fungible_asset::burn(store, amount);
+}
+
+// SAFE — reject zero-value operations
+public fun withdraw_fa(store: &mut FungibleStore, amount: u64, account: &signer) {
+    assert!(amount > 0, E_ZERO_AMOUNT);
+    // ...
+}
+```
+
+**Check:**
+1. All `fungible_asset::withdraw` / `burn` / `transfer` — what happens with `amount = 0`?
+2. Do zero-value operations increment/decrement counters, limits, or tracking variables?
+3. Can zero-value deposits create entries that affect reward distribution or voting power?
+4. Check `primary_fungible_store` operations for the same zero-value patterns
+
+*Real audit refs: Securitize (zero-value withdrawals block legitimate withdrawals — High,
+zero-value burns corrupt investor counts — High)*
+
+---
+
+## APT-14 — Concurrent Privilege Escalation
+
+**Description:** Multiple pending privilege requests (admin, treasury, operator) that can be claimed simultaneously, creating role conflicts or privilege duplication.
+
+**Pattern:**
+```move
+// VULNERABLE — multiple admins can have pending claims simultaneously
+public entry fun claim_admin_privileges(account: &signer) acquires PendingAdmin {
+    let pending = borrow_global<PendingAdmin>(@protocol);
+    assert!(signer::address_of(account) == pending.new_admin, E_NOT_PENDING);
+    // Grants admin — but what if there are two pending requests?
+    // Both could claim, creating two admins
+}
+
+// VULNERABLE — treasury can also claim admin role
+public entry fun claim_admin_privileges(account: &signer) acquires AdminStore {
+    let store = borrow_global_mut<AdminStore>(@protocol);
+    // No check that caller isn't already treasury — role confusion
+    store.admin = signer::address_of(account);
+}
+
+// SAFE — cancel previous pending before creating new
+public entry fun set_pending_admin(
+    admin: &signer,
+    new_admin: address
+) acquires AdminStore {
+    let store = borrow_global_mut<AdminStore>(@protocol);
+    assert!(signer::address_of(admin) == store.admin, E_NOT_ADMIN);
+    store.pending_admin = option::some(new_admin);
+    // Only one pending admin at a time — previous is overwritten
+}
+```
+
+**Check:**
+1. Can multiple privilege transfers be pending simultaneously?
+2. Are admin and treasury roles distinct? Can one claim the other's privileges?
+3. Does `cancel_admin_privileges` / `cancel_treasury_privileges` have proper access control?
+4. Single-step ownership transfer: is it validated? Wrong address = permanent lockout
+
+*Real audit refs: Baptswap (multiple simultaneous pending privileges — High,
+cancel_admin callable by anyone — High,
+treasury can claim admin — High,
+single-step transfer danger — High)*
+
+---
+
 ## Aptos Verification Checklist
 
 - [ ] All `table::borrow` / `table::remove` preceded by `table::contains`
@@ -261,3 +383,6 @@ public entry fun process_all(admin: &signer) acquires UserList {
 - [ ] Mixed `coin` / `fungible_asset` usage cross-checked
 - [ ] `#[test_only]` functions not accessible in production
 - [ ] `acquires` annotations verified for accuracy
+- [ ] No test/debug/mock functions without `#[test_only]` attribute (APT-12)
+- [ ] Zero-value FungibleAsset operations don't corrupt counters or limits (APT-13)
+- [ ] No concurrent pending privilege requests that can both be claimed (APT-14)

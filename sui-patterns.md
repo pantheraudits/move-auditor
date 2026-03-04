@@ -503,6 +503,134 @@ public fun finish_harvest(vault: &mut Vault, op: HarvestOp, returned_amount: u64
 
 ---
 
+## SUI-18 — Missing Object / UID Validation
+
+**Description:** Functions that accept Sui objects without validating their UID or origin. Attackers create their own instance of the same struct type with manipulated internal values.
+
+**Pattern:**
+```move
+// VULNERABLE — no validation that bank is the legitimate protocol instance
+public fun mint_shares(
+    bank: &mut Bank,
+    amount: u64,
+    ctx: &mut TxContext
+) {
+    // Attacker creates a fake Bank with share_price = 1
+    let shares = amount * PRECISION / bank.share_price;
+    // Shares minted at manipulated price
+}
+
+// SAFE — validate object ID against a registry or known ID
+public fun mint_shares(
+    bank: &mut Bank,
+    registry: &Registry,
+    amount: u64,
+    ctx: &mut TxContext
+) {
+    assert!(object::id(bank) == registry.bank_id, E_INVALID_BANK);
+    let shares = amount * PRECISION / bank.share_price;
+}
+```
+
+**Check:**
+1. Functions accepting objects that determine prices, rates, or permissions — is the object ID validated?
+2. Can an attacker create their own instance of a shared object type and pass it?
+3. Functions referencing multiple objects — verify they belong to the same protocol instance
+4. Especially critical for objects used as price sources or liquidity pools
+
+*Real audit refs: Bluefin (no UID validation, forged BankV2 — Critical),
+Kuna Labs (different SupplyPool instances referenced — High)*
+
+---
+
+## SUI-19 — Unconditional Balance Destruction
+
+**Description:** Calling `balance::destroy_zero()` on a balance that may not be zero, permanently destroying remaining funds.
+
+**Pattern:**
+```move
+// VULNERABLE — assumes remaining balance is zero after liquidation
+public fun liquidate(position: &mut Position) {
+    let seized = balance::split(&mut position.collateral, liquidation_amount);
+    // ... transfer seized to liquidator ...
+
+    let leftover = balance::withdraw_all(&mut position.collateral);
+    balance::destroy_zero(leftover);
+    // ABORTS if any collateral remains, or DESTROYS funds if called unsafely
+}
+
+// SAFE — handle non-zero remainder
+public fun liquidate(position: &mut Position, ctx: &mut TxContext) {
+    let seized = balance::split(&mut position.collateral, liquidation_amount);
+    // ... transfer seized to liquidator ...
+
+    let leftover = balance::withdraw_all(&mut position.collateral);
+    if (balance::value(&leftover) > 0) {
+        transfer::public_transfer(
+            coin::from_balance(leftover, ctx),
+            position.owner
+        );
+    } else {
+        balance::destroy_zero(leftover);
+    }
+}
+```
+
+**Check:**
+1. Every `balance::destroy_zero()` / `coin::destroy_zero()` — is the balance **guaranteed** to be zero?
+2. Common in liquidation flows where remaining collateral may not be exactly zero
+3. Also check `balance::split` where the split amount could exceed the balance (causes abort)
+4. Partial liquidation: remainder must be returned to the position owner
+
+*Real audit ref: Creek Finance (unconditional destroy_zero on non-zero balances during liquidation — High)*
+
+---
+
+## SUI-20 — Flash Loan Receipt Pool Binding
+
+**Description:** Sui flash loan receipts (hot potatoes) that don't bind to their originating pool via `object::id`. This is the Sui-specific variant of the generic type confusion pattern (see `common-move.md` 8.1) — on Sui, the key check is validating the pool's `ID` inside the receipt.
+
+**Pattern:**
+```move
+struct FlashReceipt { pool_id: ID, amount: u64 }
+
+// VULNERABLE — doesn't verify receipt.pool_id matches this pool
+public fun repay_flash_loan<T>(
+    pool: &mut Pool<T>,
+    receipt: FlashReceipt,
+    payment: Coin<T>,
+) {
+    assert!(coin::value(&payment) >= receipt.amount, E_UNDERPAY);
+    balance::join(&mut pool.reserve, coin::into_balance(payment));
+    let FlashReceipt { pool_id: _, amount: _ } = receipt;
+    // Attacker borrows from Pool A, repays to Pool B
+}
+
+// SAFE — validate receipt belongs to this specific pool via object::id
+public fun repay_flash_loan<T>(
+    pool: &mut Pool<T>,
+    receipt: FlashReceipt,
+    payment: Coin<T>,
+) {
+    assert!(receipt.pool_id == object::id(pool), E_WRONG_POOL);
+    assert!(coin::value(&payment) >= receipt.amount, E_UNDERPAY);
+    balance::join(&mut pool.reserve, coin::into_balance(payment));
+    let FlashReceipt { pool_id: _, amount: _ } = receipt;
+}
+```
+
+**Check:**
+1. Receipt struct must store the originating pool's `ID` (set via `object::id(pool)` at borrow time)
+2. Repay function must assert `receipt.pool_id == object::id(pool)`
+3. Receipt must be consumed (destructured) — not just read by reference
+4. Repayment amount must account for fees
+5. Can the same receipt be used across different pools in a PTB?
+
+*Real audit refs: Cetus (repay_flash_loan doesn't verify order_id — Critical),
+Dexlyn (repay_flash_swap missing pool binding — Critical)*
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -522,3 +650,6 @@ public fun finish_harvest(vault: &mut Vault, op: HarvestOp, returned_amount: u64
 - [ ] No unbounded loops over user-controlled vectors/tables (SUI-15)
 - [ ] Timestamp units consistent — no ms/seconds mixing (SUI-16)
 - [ ] Hot potato `start` functions assert no operation already in progress (SUI-17)
+- [ ] Objects used for pricing/permissions validated by UID against registry (SUI-18)
+- [ ] No unconditional `balance::destroy_zero()` — check value > 0 first (SUI-19)
+- [ ] Flash loan receipts validated against originating pool before repayment (SUI-20)

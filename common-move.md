@@ -203,6 +203,325 @@ public entry fun initialize(admin: &signer, config: Config) {
 
 ---
 
+## 8. Type Safety & Value Validation
+
+### 8.1 Generic Type Parameter Not Validated
+
+**Pattern:** Functions accepting generic `<T>` without verifying `T` matches the stored/expected type.
+
+**Risk:** Attackers deposit worthless tokens, repay with wrong assets, or drain pools by type confusion.
+This is the **#1 Critical pattern** across real Move audits.
+
+```move
+// VULNERABLE — accepts any CoinType for repayment
+public fun repay_flash_loan<T>(
+    pool: &mut Pool,
+    coin: Coin<T>,
+    receipt: FlashReceipt,
+) {
+    // No check that T matches the originally borrowed coin type!
+    balance::join(&mut pool.balance, coin::into_balance(coin));
+    let FlashReceipt { amount: _ } = receipt;
+}
+
+// SAFE — type parameter bound to pool and receipt
+public fun repay_flash_loan<T>(
+    pool: &mut Pool<T>,
+    coin: Coin<T>,
+    receipt: FlashReceipt<T>,
+) {
+    balance::join(&mut pool.balance, coin::into_balance(coin));
+    let FlashReceipt { amount: _ } = receipt;
+}
+```
+
+**Check:**
+1. Every function with a generic type parameter — how is the type validated?
+2. Flash loan repayment: does the receipt bind the type to the original loan?
+3. Lending functions: is `CoinType` verified against the reserve/pool it belongs to?
+4. Cross-check: does the protocol store the expected type and compare at runtime?
+
+*Real audit refs: Navi (all lending functions lack CoinType validation — Critical),
+Econia (place_market_order no type check — Critical)*
+
+*See also: APT-03 (Aptos coin type whitelisting), SUI-20 (Sui flash loan receipt pool validation)*
+
+### 8.2 Return Values in Wrong Order
+
+**Pattern:** Functions returning multiple values in incorrect order, silently corrupting all callers.
+
+```move
+// VULNERABLE — returns (reserve_y, reserve_x) instead of (reserve_x, reserve_y)
+public fun get_reserves<X, Y>(pool: &Pool<X, Y>): (u64, u64) {
+    (pool.reserve_y, pool.reserve_x)  // swapped!
+}
+```
+
+**Check:** Verify all multi-return functions return values in the documented/expected order.
+Cross-reference every call site — a swap here corrupts all swap calculations downstream.
+
+*Real audit ref: KriyaDEX (get_reserves wrong order — High)*
+
+### 8.3 Self-Referential Validation (Always-True Checks)
+
+**Pattern:** Security checks that compare a value against itself or use tautological conditions.
+
+```move
+// VULNERABLE — compares version against itself, always passes
+public fun check_version(config: &Config) {
+    assert!(config.version == config.version, E_WRONG_VERSION);
+}
+
+// VULNERABLE — inverted existence check
+public fun remove_authorized_user(list: &mut vector<address>, user: address) {
+    assert!(!vector::contains(list, &user), E_NOT_FOUND);  // should be WITHOUT the !
+}
+
+// SAFE
+public fun check_version(config: &Config) {
+    assert!(config.version == CURRENT_VERSION, E_WRONG_VERSION);
+}
+```
+
+**Check:**
+1. Search for `assert!` conditions where both sides reference the same variable
+2. Check for inverted boolean logic (`!exists` vs `exists`, `!contains` vs `contains`)
+3. Verify all security-critical comparisons use an independent reference value
+
+*Real audit refs: Hop Aggregator (version self-comparison — High),
+Typus Finance (inverted existence check — High)*
+
+### 8.4 Constant Definition Errors
+
+**Pattern:** Hardcoded constants with wrong values — silently breaks security assumptions.
+
+```move
+// REAL BUGS FROM AUDITS
+const MAX_U64: u64 = 0xFFFFFFFFFFFFFFF;              // 15 hex digits, should be 16
+const DAY_SECONDS: u64 = 600;                          // 10 minutes, not 24 hours!
+const ONE_DAY: u64 = 0;                                // should be 86_400_000
+const SECONDS_PER_YEAR: u64 = 365 * 24 * 60 * 60 * 1000; // 1000x too large (ms not s)
+
+// CORRECT
+const MAX_U64: u64 = 0xFFFFFFFFFFFFFFFF;               // 16 hex digits
+const DAY_SECONDS: u64 = 86_400;                        // 24 * 60 * 60
+const ONE_DAY_MS: u64 = 86_400_000;                     // 24 * 60 * 60 * 1000
+const SECONDS_PER_YEAR: u64 = 31_536_000;               // 365 * 24 * 60 * 60
+```
+
+**Check:**
+1. Grep all `const` definitions — verify values match names and documentation
+2. Check MAX_U64/MAX_U128 have correct number of hex digits
+3. Verify time constants: `86400` (day), `31536000` (year), `3600` (hour)
+4. Check precision/scaling constants match token decimals
+
+*Real audit refs: Bluefin (MAX_u64 missing digit — Critical),
+Dexlyn (DAY_SECONDS=600 — High), SuiPad (one_day=0 — High),
+Navi (SECONDS_PER_YEAR 1000x — Critical)*
+
+---
+
+## 9. State Consistency
+
+### 9.1 Missing State Update After Claim/Refund/Withdraw
+
+**Pattern:** Function transfers assets but doesn't flip a "claimed" flag or decrement balance.
+Users call repeatedly to drain the protocol.
+
+```move
+// VULNERABLE — no state update after refund
+public entry fun claim_refund(
+    vault: &mut Vault,
+    cert: &Certificate,
+    ctx: &mut TxContext
+) {
+    let refund = coin::take(&mut vault.balance, cert.invested_amount, ctx);
+    transfer::public_transfer(refund, tx_context::sender(ctx));
+    // BUG: cert.claimed never set to true — user calls again to drain
+}
+
+// SAFE — mark as claimed
+public entry fun claim_refund(
+    vault: &mut Vault,
+    cert: &mut Certificate,
+    ctx: &mut TxContext
+) {
+    assert!(!cert.claimed, E_ALREADY_CLAIMED);
+    cert.claimed = true;
+    let refund = coin::take(&mut vault.balance, cert.invested_amount, ctx);
+    transfer::public_transfer(refund, tx_context::sender(ctx));
+}
+```
+
+**Check:**
+1. Every claim/refund/withdraw function — is there a flag or balance update preventing re-invocation?
+2. Search for transfer/send calls — does the function modify state to reflect the transfer?
+3. Check if the receipt/certificate/ticket is consumed (destroyed) or just read
+
+*Real audit refs: SuiPad (claim_refund no state update — Critical),
+MoveGPT (refund_entry callable multiple times — High),
+Mysten Republic (repeated invocation for excessive claims — High)*
+
+### 9.2 Double Scaling / Unit Mixing
+
+**Pattern:** Scaled balances (with interest index) mixed with raw amounts in the same calculation.
+
+```move
+// VULNERABLE — comparing scaled debt with unscaled repayment
+let scaled_debt = user.scaled_variable_debt;    // in RAY units (1e27)
+let repay_amount = coin::value(&payment);       // in token decimals (1e6 for USDC)
+assert!(repay_amount >= scaled_debt, E_UNDERPAY); // apples vs oranges!
+
+// SAFE — normalize to same scale
+let actual_debt = scaled_debt * borrow_index / RAY;
+assert!(repay_amount >= actual_debt, E_UNDERPAY);
+```
+
+**Check:**
+1. Identify all "scaled" or "indexed" values in the codebase
+2. Every arithmetic operation must use values in the same scale
+3. Watch for variables named `scaled_*` used directly with raw amounts
+4. Check interest index: multiply or divide? Verify direction matches the math
+
+*Real audit refs: Navi (scaled supply used with unscaled amounts — Critical),
+AAVE v3 (borrow index set to token decimals not RAY — High),
+ThalaSwapV2 (double-upscaling in pay_flashloan — Critical)*
+
+### 9.3 Missing Recovery / Withdrawal Functions
+
+**Pattern:** Tokens or fees accumulate in a contract with no function to extract them.
+
+**Check:**
+1. For every fee collection (`balance::join`, `coin::put`): does a corresponding withdrawal function exist?
+2. For every vault/pool: can residual tokens be recovered by admin?
+3. Check refund flows: can unused tokens in failed campaigns/auctions be recovered?
+4. If missing: severity is High (permanent fund lock)
+
+*Real audit refs: Kofi Finance (deposit fees, no withdraw — Critical),
+Scallop (flash loan fees trapped — High),
+SuiPad (unused tokens stuck in vault — High)*
+
+---
+
+## 10. Control Flow & Protocol Logic
+
+### 10.1 Recursive / Circular Function Calls
+
+**Pattern:** Function A calls function B which calls A again — infinite recursion, permanent DoS.
+
+```move
+// VULNERABLE — circular call chain
+public fun distribute_fees<X, Y>(pool: &mut Pool<X, Y>) {
+    let fee_coins = collect_fees(pool);
+    swap_exact_x_to_y_direct(pool, fee_coins); // this calls distribute_fees!
+}
+
+public fun swap_exact_x_to_y_direct<X, Y>(
+    pool: &mut Pool<X, Y>, coins: Coin<X>
+): Coin<Y> {
+    // ... swap logic ...
+    distribute_fees(pool); // infinite recursion!
+}
+```
+
+**Check:**
+1. Trace call chains for cycles — especially fee distribution that calls swap internally
+2. Any function that both triggers and is triggered by the same action
+3. Look for functions called in hooks/callbacks that can re-enter the calling function
+
+*Real audit ref: Baptswap (distribute_dex_fees → swap → distribute_dex_fees — High)*
+
+### 10.2 Flash Loan Accumulator Manipulation
+
+**Pattern:** Stake/unstake in the same transaction to manipulate reward accumulators.
+
+```move
+// VULNERABLE — accumulator updates on every stake/unstake
+public fun stake(pool: &mut Pool, amount: u64) {
+    update_reward_accumulator(pool);  // updates based on current total_staked
+    pool.total_staked = pool.total_staked + amount;
+}
+
+public fun unstake(pool: &mut Pool, amount: u64): u64 {
+    update_reward_accumulator(pool);  // updates again
+    pool.total_staked = pool.total_staked - amount;
+    calculate_and_return_rewards(pool) // inflated rewards!
+}
+
+// Attack: flash_loan → stake(huge) → unstake + claim rewards → repay
+```
+
+**Check:**
+1. Can stake + claim + unstake happen in the same transaction/PTB?
+2. Does the accumulator use time-weighted values or instant values?
+3. Is there a minimum staking duration before rewards are claimable?
+4. Does `total_staked` changing mid-tx affect other users' reward share?
+
+*Real audit refs: Thala Labs (improper accumulator updates — Critical, 2x),
+Kofi Finance (kAPT double minting — High)*
+
+### 10.3 Cooldown / Timelock Bypass via Inverted Logic
+
+**Pattern:** Wrong comparison operator or inverted boolean makes time-based protection useless.
+
+```move
+// VULNERABLE — wrong operator, allows action BEFORE cooldown expires
+public fun withdraw(state: &State, clock: &Clock) {
+    let elapsed = clock::timestamp_ms(clock) - state.last_action;
+    assert!(elapsed < COOLDOWN_PERIOD, E_COOLDOWN); // BUG: should be >=
+}
+
+// VULNERABLE — zero value bypasses the entire check
+public fun check_time(end_time: u64, now: u64) {
+    if (end_time != 0 && end_time < now) { abort E_EXPIRED };
+    // BUG: end_time == 0 skips check entirely
+}
+
+// SAFE
+public fun withdraw(state: &State, clock: &Clock) {
+    let elapsed = clock::timestamp_ms(clock) - state.last_action;
+    assert!(elapsed >= COOLDOWN_PERIOD, E_COOLDOWN_NOT_MET);
+}
+```
+
+**Check:**
+1. Every time comparison: verify operator direction matches intent (`>=` for "after", `<` for "before")
+2. Check for zero-value bypass in time fields (if `time == 0`, is the check skipped?)
+3. Verify boolean conditions aren't inverted
+
+*Real audit refs: Elixir (wrong comparison, cooldown bypass — High),
+Securitize (inverted logic, zero never aborts — Critical)*
+
+### 10.4 Incorrect Liquidation Logic
+
+**Pattern:** Liquidation functions that pass the wrong variable, skip solvency checks, or miscalculate amounts.
+
+```move
+// VULNERABLE — burns collateral amount instead of debt amount
+public fun liquidate(position: &mut Position, collateral_to_seize: u64, debt_to_repay: u64) {
+    burn_debt_tokens(position, collateral_to_seize); // BUG: should be debt_to_repay!
+    transfer_collateral(position, collateral_to_seize);
+}
+
+// VULNERABLE — no solvency check after withdrawal
+public fun withdraw(account: &mut Account, amount: u64) {
+    account.balance = account.balance - amount;
+    // Missing: assert!(is_solvent(account), E_WOULD_BE_INSOLVENT);
+}
+```
+
+**Check:**
+1. Verify the correct variable (debt vs collateral) is passed at each step in the liquidation flow
+2. `withdraw` must check solvency AFTER the withdrawal, not before
+3. Liquidation must not be blockable by cooldowns, paused states, or other guards
+4. Verify liquidation incentive math doesn't let liquidators extract more than intended
+
+*Real audit refs: AAVE v3 (collateral burned instead of debt — High),
+Echelon (missing solvency check — High),
+Aries Markets (settle_share_amount wrong conversion — High)*
+
+---
+
 ## Verification Checklist
 
 Run through each item and mark ✅ (clean) or ❌ (finding):
@@ -219,6 +538,17 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] State consistent before all external calls
 - [ ] Initialization is one-time-only
 - [ ] Upgrade authority is governed or noted
+- [ ] All generic type parameters validated against stored/expected types (8.1)
+- [ ] Multi-return functions return values in documented order (8.2)
+- [ ] No self-referential or always-true validation checks (8.3)
+- [ ] All constants verified: time (86400/day), precision, MAX values correct digit count (8.4)
+- [ ] Every claim/refund/withdraw updates state to prevent re-invocation (9.1)
+- [ ] No mixed scaled/unscaled values in arithmetic (9.2)
+- [ ] Every fee collection has a corresponding withdrawal function (9.3)
+- [ ] No circular/recursive function call chains (10.1)
+- [ ] Stake/unstake cannot manipulate reward accumulators in same transaction (10.2)
+- [ ] All time comparisons use correct operator direction (10.3)
+- [ ] Liquidation functions pass correct variables — debt vs collateral (10.4)
 
 > **Deep-dive prompts and the Move Vulnerability Patterns prompt pack have been moved to
 > `audit-prompts.md` in this directory.** Load that file for targeted per-module,

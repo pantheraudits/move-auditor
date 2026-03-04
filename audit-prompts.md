@@ -176,3 +176,36 @@ For each pattern found:
 - Always audit generic type parameter validation in every function that accepts generic types.
 - Treat Move function visibility as a first-class access-control surface: review every `public` function.
 - Use this with the verification checklist in `common-move.md` for broad + Move-specific coverage.
+
+---
+
+## MVD-Derived Targeted Prompts
+
+These prompts target the most frequently exploited patterns from 200+ real Move audit reports.
+Use them for focused deep-dives after the initial scan.
+
+### I. Generic Type & Receipt Validation
+
+- "Find every function with a generic type parameter `<T>`, `<CoinType>`, `<X, Y>`, etc. For each, trace how the type is validated. Flag any function where the type parameter is not bound to the pool, vault, or receipt it operates on — an attacker can pass any coin type."
+- "Find all flash loan / flash swap functions. Trace the receipt from creation to repayment. Is the receipt's pool ID / coin type validated during repayment? Can a receipt from Pool A be repaid to Pool B?"
+- "Search for functions that accept an object reference (`&T`, `&mut T`) used for pricing, share calculation, or permission checks. Is the object's ID validated against a registry or known constant? Could an attacker create their own instance with manipulated values?"
+
+### J. Constant & Scaling Verification
+
+- "Grep all `const` definitions in the codebase. For each constant: (a) verify the value matches its name (e.g., `DAY_SECONDS` should be 86400), (b) check MAX_U64/MAX_U128 have the correct number of digits, (c) verify time constants (seconds vs milliseconds) are consistent with how they're used. Flag any mismatch — these are Critical/High bugs."
+- "Find all variables named `scaled_*`, `index_*`, or `*_per_share`. Trace every arithmetic operation that uses them. Are they ever mixed with raw token amounts without conversion? Are there places where a scaled value is compared to an unscaled value or vice versa?"
+
+### K. State Update & Repeated Action Prevention
+
+- "For every function that transfers tokens, mints shares, or distributes rewards: does it update state to prevent being called again for the same entitlement? Search for claim/refund/withdraw functions that don't set a `claimed` flag, don't burn the receipt, or don't decrement the claimable balance."
+- "Find every fee collection point (`balance::join`, `coin::put`, `coin::merge_all`). For each, trace if there's a corresponding admin withdrawal function. If fees accumulate with no extraction path, they're permanently locked."
+
+### L. Accumulator & Reward Manipulation
+
+- "Identify all reward accumulator / `reward_per_token` / `reward_per_share` update logic. Can an attacker stake a large amount, trigger an accumulator update, then immediately unstake and claim inflated rewards — all in one transaction? Is there a minimum staking duration enforced?"
+- "For every stake/unstake function pair: simulate a flash loan attack where an attacker borrows → stakes → claims → unstakes → repays in one transaction. What is the maximum extractable value? Is this prevented by time-based locks or snapshot-based calculations?"
+
+### M. Liquidation & Solvency
+
+- "Trace the complete liquidation flow from health check to collateral seizure. At each step, verify: (a) the correct variable is passed (debt amount vs collateral amount), (b) solvency is checked AFTER withdrawal/repayment, (c) liquidation cannot be blocked by cooldowns or paused states, (d) remaining collateral is returned to the user, not destroyed."
+- "For every `withdraw` function in a lending protocol: is there a solvency check AFTER the withdrawal amount is deducted? Can a user withdraw collateral while their position is underwater?"
