@@ -371,6 +371,81 @@ single-step transfer danger — High)*
 
 ---
 
+## APT-15 — Ordered Map Key Field Ordering (Lexicographic Sort Trap)
+
+**Description:** When a struct is used as a key in `OrderedMap` or `BigOrderedMap`, fields are compared **lexicographically starting from the first declared field** in the struct definition. If the first field isn't your intended primary sort key, every range scan, `borrow_front`, `borrow_back`, and early termination is silently wrong.
+
+**Pattern:**
+```move
+// VULNERABLE — struct sorts by account first, but code assumes sorting by price
+struct OrderKey has copy, drop, store {
+    account: address,   // <-- sorts by this first!
+    order_id: u64,      // then this
+    price: u64,         // this barely matters for ordering
+}
+
+// Developer assumes orders are sorted by price — WRONG
+// borrow_front returns lowest account address, not lowest price
+let cheapest = ordered_map::borrow_front(&orderbook);
+
+// SAFE — put primary sort field first
+struct OrderKey has copy, drop, store {
+    price: u64,         // primary sort key — first field
+    order_id: u64,      // tiebreaker
+    account: address,   // least significant
+}
+```
+
+**Check:**
+1. Find every struct used as a key in `OrderedMap` or `BigOrderedMap`
+2. Verify the first declared field is the intended primary sort key
+3. Check all `borrow_front`, `borrow_back`, and range iteration — do they return what the code expects?
+4. No compiler warning, no runtime error — the map works, just not in the order you think
+
+---
+
+## APT-16 — Map Type Selection DoS
+
+**Description:** Aptos has multiple map types with very different performance characteristics. Using the wrong one for permissionless data is a DoS vulnerability.
+
+**Map types and when to use them:**
+
+| Type | Backing | Lookup | Growth | Use for |
+|------|---------|--------|--------|---------|
+| `SimpleMap` (deprecated) | vector | O(n) linear scan | bounded | Never for permissionless data |
+| `OrderedMap` | single slot | O(log n) | bounded | Small bounded sets only |
+| `Table` | one slot per key | O(1) | unbounded | Unbounded data, no iteration needed |
+| `BigOrderedMap` | B+ tree | O(log n) | unbounded, concurrent | Unbounded data with iteration |
+
+**Pattern:**
+```move
+// VULNERABLE — SimpleMap with permissionless additions
+struct Registry has key {
+    users: SimpleMap<address, UserInfo>,  // O(n) lookup, anyone can add
+}
+
+public entry fun register(account: &signer) acquires Registry {
+    let registry = borrow_global_mut<Registry>(@protocol);
+    // Attacker registers thousands of entries
+    // Every subsequent lookup/insert costs O(n) gas
+    // Eventually: mint, burn, liquidate all bricked
+    simple_map::add(&mut registry.users, signer::address_of(account), UserInfo {});
+}
+
+// SAFE — use Table or BigOrderedMap for permissionless data
+struct Registry has key {
+    users: Table<address, UserInfo>,  // O(1) lookup, scales to any size
+}
+```
+
+**Check:**
+1. Flag any `SimpleMap` or `SmartTable` usage — both are deprecated but still in production codebases
+2. If the data structure allows permissionless additions (any user can add entries), it MUST use `Table` or `BigOrderedMap`
+3. Check if the protocol iterates over the map — `Table` doesn't support iteration; use `BigOrderedMap` if iteration is needed
+4. The data structure layer is where some of the highest-impact DoS bugs hide
+
+---
+
 ## Aptos Verification Checklist
 
 - [ ] All `table::borrow` / `table::remove` preceded by `table::contains`
@@ -386,3 +461,5 @@ single-step transfer danger — High)*
 - [ ] No test/debug/mock functions without `#[test_only]` attribute (APT-12)
 - [ ] Zero-value FungibleAsset operations don't corrupt counters or limits (APT-13)
 - [ ] No concurrent pending privilege requests that can both be claimed (APT-14)
+- [ ] Ordered map key structs have primary sort field as first declared field (APT-15)
+- [ ] No `SimpleMap` / `SmartTable` for permissionless unbounded data — use `Table` or `BigOrderedMap` (APT-16)

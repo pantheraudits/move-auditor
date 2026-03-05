@@ -631,6 +631,78 @@ Dexlyn (repay_flash_swap missing pool binding — Critical)*
 
 ---
 
+## SUI-21 — Denylist Enforcement Awareness (Validator-Level + Epoch Gap)
+
+**Description:** Sui's regulated coin denylist (`DenyCapV2`) is enforced at the **validator level during transaction input validation**, not in Move code. This creates two auditor-relevant behaviors:
+
+1. **Sending is blocked instantly** — a blocked user cannot submit a transaction using their regulated coins as inputs. The tx fails before Move code runs.
+2. **Receiving is only blocked at next epoch (~24hrs)** — a blocked user can still receive coins until the epoch changes.
+
+**Risk:** The epoch gap for receiving creates a dangerous window in cross-chain scenarios. If tokens are burned on a source chain and minting is attempted on destination after epoch change, funds can be lost permanently.
+
+```move
+// FALSE POSITIVE — this is NOT a bypass
+// A blocked user calling transfer directly will fail at the validator level
+// before this Move code ever executes
+public fun transfer_coins(coin: Coin<REGULATED>, recipient: address) {
+    // No denylist check needed here — validators enforce it
+    transfer::public_transfer(coin, recipient);
+}
+
+// REAL RISK — cross-chain bridge: burn on source, mint on destination
+// If user is blocked between burn and mint, funds are lost
+public fun bridge_mint(proof: BurnProof, recipient: address, ctx: &mut TxContext) {
+    // recipient was allowed when burn happened on source chain
+    // but may be blocked by the time this mints on Sui (epoch changed)
+    let coin = coin::mint(&mut treasury, proof.amount, ctx);
+    transfer::public_transfer(coin, recipient);  // recipient now blocked = stuck
+}
+```
+
+**Check:**
+1. Don't flag missing denylist checks in Move code — Sui enforces at runtime/validator level
+2. For regulated coins: check if the protocol handles the ~24hr receiving gap
+3. Cross-chain bridges: verify the protocol handles the case where a recipient becomes blocked between source burn and destination mint
+4. Flag any protocol that assumes denylist blocking is instant for both sending AND receiving
+
+*Refs: [Sui DenyCapV2 docs](https://docs.sui.io/references/framework/sui_sui/coin#sui_coin_DenyCapV2),
+[deny_list_v2.rs source](https://github.com/MystenLabs/sui/blob/main/crates/sui-types/src/deny_list_v2.rs)*
+
+---
+
+## SUI-22 — Dependency Upgrade Version Contagion
+
+**Description:** When a Sui package upgrades, it changes its object version. The old package's version check fails for updated objects, breaking all callers of the old package. If your protocol is immutable and calls a dependency that upgrades, every call through the old package path fails permanently.
+
+**Pattern:**
+```move
+// Your immutable protocol calls DEX v1 for liquidations
+public fun liquidate(position: &mut Position, pool: &mut dex_v1::Pool) {
+    let proceeds = dex_v1::swap(pool, position.collateral);
+    // Works fine... until DEX upgrades to v2
+    // DEX v2 updates all Pool objects to version=2
+    // dex_v1::swap() checks version==1, fails
+    // ALL liquidations permanently bricked
+}
+```
+
+**The contagion effect:**
+- If Protocol A is upgradeable, Protocol B using A must also be upgradeable
+- Protocol C using B must be upgradeable
+- One upgrade at the bottom forces every protocol above to centralize
+- Choosing immutability (for security) becomes maximum vulnerability in this model
+
+**Check:**
+1. For every external dependency: is it upgradeable? Does it use object version checks?
+2. If the audited protocol is immutable and any dependency is upgradeable → flag as **Critical** (protocol can be permanently bricked by a dependency upgrade)
+3. If the protocol is upgradeable: does it have a mechanism to update dependency calls after upstream upgrades?
+4. Check for version-gated function calls in dependencies (`assert!(obj.version == CURRENT_VERSION)`)
+5. Evaluate the full dependency tree — contagion can be multi-level
+
+*Ref: [Move is not perfect: The Upgrade Trap](https://medium.com/@gfusee33/move-is-not-perfect-2-the-upgrade-trap-1d2857417e37)*
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -653,3 +725,5 @@ Dexlyn (repay_flash_swap missing pool binding — Critical)*
 - [ ] Objects used for pricing/permissions validated by UID against registry (SUI-18)
 - [ ] No unconditional `balance::destroy_zero()` — check value > 0 first (SUI-19)
 - [ ] Flash loan receipts validated against originating pool before repayment (SUI-20)
+- [ ] No false-positive denylist findings — enforcement is validator-level, not Move code; check epoch gap for receiving (SUI-21)
+- [ ] All external dependencies checked for upgradeability — immutable protocol + upgradeable dep = bricking risk (SUI-22)

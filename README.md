@@ -10,7 +10,7 @@
 
 ## What is this?
 
-A Claude Code / Cursor skill that auto-audits Move smart contracts when you open `.move` files. Covers common Move bugs, Sui-specific patterns (SUI-01–10), Aptos-specific patterns (APT-01–11), and DeFi attack vectors (DEFI-01–10).
+A skill you plug into Claude Code that turns it into a Move (Sui & Aptos) smart contract security auditor — 100+ vulnerability patterns from 200+ real audits, ready to hunt bugs the moment you open a `.move` file.
 
 ---
 

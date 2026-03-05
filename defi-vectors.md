@@ -132,6 +132,31 @@ let price = pool.reserve_b / pool.reserve_a;  // flash-loan manipulable
 5. **Collateral type manipulation during liquidation:** On Sui, if collateral is a mutable
    shared object, can its value change between the liquidation check and the liquidation execution?
 
+6. **Off-by-threshold (sequential check trap):** Multiple sequential health factor checks
+   where the first is stricter than needed, blocking valid liquidations.
+   ```move
+   // VULNERABLE — two sequential checks, first one blocks valid liquidations
+   public fun liquidate(position: &Position) {
+       let hf = calculate_health_factor(position);
+       assert!(hf < 9500, E_HEALTHY);  // 0.95 — too strict!
+       assert!(hf < 10000, E_HEALTHY); // 1.0 — correct threshold
+       // Users with HF between 0.95–1.0 are unhealthy but unliquidatable
+       // Bad debt silently accumulates
+   }
+
+   // SAFE — single threshold check
+   public fun liquidate(position: &Position) {
+       let hf = calculate_health_factor(position);
+       assert!(hf < 10000, E_HEALTHY); // only check: HF < 1.0
+       // Separate close factor logic can use 0.95 threshold if needed
+   }
+   ```
+   Check: Verify liquidation entry has only one health factor gate matching the actual
+   liquidation threshold. Stricter checks (like close factor) should control *how much*
+   is liquidated, not *whether* liquidation is allowed.
+   *Real audit ref: Aptos AAVE fork (hf < 0.95 blocks liquidation for 0.95–1.0 accounts,
+   originally caught by Certora — High)*
+
 ---
 
 ## DEFI-07 — Slippage and Front-Running

@@ -78,6 +78,26 @@ let result = balance - fee; // aborts if fee > balance
 **Risk:** Silent truncation of high bits.
 **Check:** All narrowing casts should have bounds assertions.
 
+### 2.5 Bitwise Operations — No Overflow Protection
+
+**Pattern:** Move auto-aborts on arithmetic overflow (addition, subtraction, multiplication), but bitwise operations (`<<`, `>>`, `&`, `|`, `^`) have **no such safeguards**. Bit shifts can silently overflow or produce unexpected results.
+
+```move
+// VULNERABLE — left shift can silently lose high bits
+let shifted = value << amount;  // no overflow abort like arithmetic ops
+
+// SAFE — guard shift amount and check for overflow
+assert!(amount < 64, E_SHIFT_OVERFLOW);
+assert!(value <= (MAX_U64 >> amount), E_WOULD_OVERFLOW);
+let shifted = value << amount;
+```
+
+**Check:**
+1. Grep all bitwise operations (`<<`, `>>`, `&`, `|`, `^`) in the codebase
+2. For each left shift: can the shift amount exceed the bit width? Can high bits be lost?
+3. For each right shift: is precision loss acceptable?
+4. Especially dangerous in fee calculations, fixed-point math, and bitmap/flag manipulation
+
 ---
 
 ## 3. Resource Safety
@@ -168,6 +188,34 @@ public entry fun withdraw(account: &signer, target: address) {
 **Pattern:** Protocol depends on an external module that can be upgraded.
 **Risk:** Upgrade changes behavior, breaking assumptions.
 **Check:** Flag all external module dependencies. Note which are upgradeable.
+
+### 6.4 Stale State from Hidden External Mutations
+
+**Pattern:** Protocol reads a value (exchange rate, price, index), then calls an external module that internally mutates that same value (e.g., interest accrual), making the previously-read value stale.
+
+```move
+// VULNERABLE — reads exchange rate, then calls withdraw() which accrues interest internally
+public fun user_withdraw(vault: &mut Vault, pool: &mut ExternalPool, shares: u64, ctx: &mut TxContext) {
+    let rate = get_exchange_rate(pool);         // reads rate BEFORE accrual
+    let amount = shares * rate / PRECISION;     // calculates with stale rate
+    external_pool::withdraw(pool, amount);      // this internally calls accrue_interest()!
+    // User underpaid — rate was stale, vault accounting silently drifts
+}
+
+// SAFE — accrue first, then read, or re-read after external call
+public fun user_withdraw(vault: &mut Vault, pool: &mut ExternalPool, shares: u64, ctx: &mut TxContext) {
+    external_pool::accrue_interest(pool);       // force accrual first
+    let rate = get_exchange_rate(pool);         // now rate is fresh
+    let amount = shares * rate / PRECISION;
+    external_pool::withdraw(pool, amount);
+}
+```
+
+**Check:**
+1. For every external call: does the called function internally mutate state that you already read?
+2. Common in yield vaults, lending wrappers, and aggregators built on top of other protocols
+3. Look for `get_*` / `calculate_*` calls followed by an external `deposit` / `withdraw` / `swap`
+4. Re-read or re-derive values after any external call that may have side effects
 
 ---
 
@@ -532,10 +580,12 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] No division before multiplication in financial math
 - [ ] All divisions guarded against zero denominator
 - [ ] No narrowing casts without bounds assertions
+- [ ] All bitwise operations checked for overflow/precision loss — Move does NOT auto-check these (2.5)
 - [ ] All `move_from` calls preceded by ownership check
 - [ ] No timestamp dependencies exploitable in <30s window
 - [ ] All user inputs validated (zero checks, bounds checks)
 - [ ] State consistent before all external calls
+- [ ] No stale reads before external calls that internally mutate the read value (6.4)
 - [ ] Initialization is one-time-only
 - [ ] Upgrade authority is governed or noted
 - [ ] All generic type parameters validated against stored/expected types (8.1)

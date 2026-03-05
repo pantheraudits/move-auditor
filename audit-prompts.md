@@ -49,7 +49,8 @@ Use these prompts directly during manual review or with an AI assistant. Replace
 
 - "List all cross-module calls from `<module>` and explain assumptions made about return values and side effects."
 - "Check whether protocol state is left inconsistent before external calls and whether failures can strand partial updates."
-- "Identify dependencies on upgradeable external modules and describe how an upgrade could violate local assumptions."
+- "Identify dependencies on upgradeable external modules and describe how an upgrade could violate local assumptions. On Sui: does the dependency use object version checks? If so, an upgrade changes all object versions — will the audited protocol's calls to the old package fail permanently?"
+- "For every external call that reads a value then calls into another module: does the called module internally mutate the read value (e.g., interest accrual, reward distribution)? If so, the pre-read value is stale. Check yield vaults, lending wrappers, and aggregators built on top of other protocols."
 - "For oracle/pricing dependencies, verify stale, missing, or manipulated data cannot create profitable attack paths."
 
 ### G. Initialization, Upgrades, Emergency Controls
