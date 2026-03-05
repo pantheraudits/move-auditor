@@ -92,4 +92,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contact
 
-Panther Audits — [@pantheraudits](https://github.com/pantheraudits)
+Panther Audits — [GitHub](https://github.com/pantheraudits) · [Telegram](https://t.me/theblackpantherhere) · [X](https://x.com/thepantherplus)
