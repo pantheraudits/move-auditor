@@ -84,7 +84,7 @@ AI-assisted audit output **must be manually verified**. This skill accelerates y
 - [ ] Aptos DeFi protocol-specific patterns (Thala, Aries, Echelon)
 - [ ] Automated grep patterns for common Move anti-patterns
 - [ ] Report templates for private audits vs. contest submissions
-
+- [ ] Benchmarking the skill against baseline prompts and manual review to see where it actually makes a difference 
 
 ## Contributing
 
