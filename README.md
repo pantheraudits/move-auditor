@@ -54,6 +54,8 @@ The skill also **auto-activates** when `.move` files are present or when you ask
 3. Run a full vulnerability scan
 4. Produce a structured audit report with severity, location, PoC scenario, and fix
 
+**Read the full write-up:** [The Move Auditor — Blog Post](https://pantheraudits.com/blog/the-move-auditor.html)
+
 
 ## Skill Structure
 
