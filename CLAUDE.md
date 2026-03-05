@@ -6,9 +6,9 @@ Instructions for Claude when working inside the `move-auditor` repository.
 
 ## What this repo is
 
-This is a Claude Code / Cursor skill for auditing Move smart contracts on Sui and Aptos.
+This is a Claude Code skill for auditing Move smart contracts on Sui and Aptos.
 The skill lives in `move-auditor/` and is installed by copying that directory to
-`~/.claude/commands/move-auditor` or `~/.cursor/skills/move-auditor`.
+`~/.claude/commands/move-auditor`.
 
 ---
 

@@ -1,6 +1,6 @@
 # move-auditor
 
-> Claude Code / Cursor skill for Move smart contract security auditing — Sui & Aptos.
+> Claude Code skill for Move smart contract security auditing — Sui & Aptos.
 > Built by [Panther Audits](https://github.com/pantheraudits).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/mit/)
@@ -27,12 +27,6 @@ cp -r move-auditor ~/.claude/commands/move-auditor
 ```bash
 cd move-auditor && git pull
 cp -r . ~/.claude/commands/move-auditor
-```
-
-**For Cursor:**
-```bash
-mkdir -p ~/.cursor/skills
-cp -r move-auditor ~/.cursor/skills/move-auditor
 ```
 
 ---
