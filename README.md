@@ -1,14 +1,14 @@
 # move-auditor
 
 > Claude Code skill for Move smart contract security auditing — Sui & Aptos.
-> Built by [Panther Audits](https://github.com/pantheraudits).
+> Built by [Panther](https://x.com/thepantherplus).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/mit/)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ## What is this?
 
-A skill you plug into Claude Code that turns it into a Move (Sui & Aptos) smart contract security auditor — 100+ vulnerability patterns from 200+ real audits, ready to hunt bugs the moment you open a `.move` file.
+A skill you plug into Claude Code that turns it into a Move (Sui & Aptos) smart contract security auditor — battle-tested vulnerability patterns drawn from real-world exploits, ready to hunt bugs the moment you open a `.move` file.
 
 ## Install
 
