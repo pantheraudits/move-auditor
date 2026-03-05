@@ -6,13 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/mit/)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
----
-
 ## What is this?
 
 A skill you plug into Claude Code that turns it into a Move (Sui & Aptos) smart contract security auditor — 100+ vulnerability patterns from 200+ real audits, ready to hunt bugs the moment you open a `.move` file.
-
----
 
 ## Install
 
@@ -29,7 +25,6 @@ cd move-auditor && git pull
 cp -r . ~/.claude/commands/move-auditor
 ```
 
----
 
 ## Usage
 
@@ -59,7 +54,6 @@ The skill also **auto-activates** when `.move` files are present or when you ask
 3. Run a full vulnerability scan
 4. Produce a structured audit report with severity, location, PoC scenario, and fix
 
----
 
 ## Skill Structure
 
@@ -77,13 +71,11 @@ move-auditor/
 Reference files are loaded **on demand** — the agent reads them when the chain is detected,
 keeping the initial context window lean.
 
----
 
 ## Disclaimer
 
 AI-assisted audit output **must be manually verified**. This skill accelerates your workflow — it does not replace deep manual review and PoC testing. All findings require human confirmation before being included in any report.
 
----
 
 ## Roadmap
 
@@ -93,7 +85,6 @@ AI-assisted audit output **must be manually verified**. This skill accelerates y
 - [ ] Automated grep patterns for common Move anti-patterns
 - [ ] Report templates for private audits vs. contest submissions
 
----
 
 ## Contributing
 
