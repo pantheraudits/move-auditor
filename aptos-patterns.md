@@ -446,6 +446,197 @@ struct Registry has key {
 
 ---
 
+## APT-17 — ConstructorRef Leak
+
+**Description:** When creating Aptos Objects, exposing the `ConstructorRef` allows anyone to generate `TransferRef`, `DeleteRef`, `ExtendRef`, etc. — giving full control over the object. An NFT mint function that returns `ConstructorRef` lets the original creator reclaim the NFT after it's sold.
+
+**Pattern:**
+```move
+// VULNERABLE — returning ConstructorRef lets caller generate TransferRef
+public fun mint(creator: &signer): ConstructorRef {
+    let constructor_ref = token::create_named_token(creator, ...);
+    constructor_ref  // attacker stores this, generates TransferRef, reclaims NFT after sale
+}
+
+// SAFE — never expose ConstructorRef
+public fun mint(creator: &signer) {
+    let constructor_ref = token::create_named_token(creator, ...);
+    // Use constructor_ref internally, then let it go out of scope
+}
+```
+
+**Check:**
+1. No function should return `ConstructorRef` — it's the master key for an object
+2. `TransferRef`, `DeleteRef`, `ExtendRef` derived from `ConstructorRef` must be stored securely or not at all
+3. If `TransferRef` is stored, verify it's access-gated — otherwise original creator can transfer the object back at will
+4. Check NFT minting flows especially — returned refs enable post-sale theft
+
+*Source: [Aptos Move Security Guidelines](https://aptos.dev/build/smart-contracts/move-security-guidelines)*
+
+---
+
+## APT-18 — Object Account Resource Grouping
+
+**Description:** Multiple `key`-able resources stored at the **same object account** are all transferred together when any one of them is transferred. `object::transfer` operates on `ObjectCore`, which applies to all resources at that address.
+
+**Pattern:**
+```move
+// VULNERABLE — Monkey and Toad at same object account
+fun mint_two(sender: &signer, recipient: address) {
+    let constructor_ref = &object::create_object_from_account(sender);
+    let obj_signer = object::generate_signer(constructor_ref);
+    move_to(&obj_signer, Monkey {});
+    move_to(&obj_signer, Toad {});  // same address as Monkey!
+
+    let monkey_obj = object::address_to_object<Monkey>(obj_addr);
+    object::transfer(sender, monkey_obj, recipient);
+    // BUG: Toad is also transferred — both resources share the object account
+}
+
+// SAFE — separate object accounts per resource
+fun mint_two(sender: &signer, recipient: address) {
+    let ref_monkey = &object::create_object(signer::address_of(sender));
+    let ref_toad = &object::create_object(signer::address_of(sender));
+    move_to(&object::generate_signer(ref_monkey), Monkey {});
+    move_to(&object::generate_signer(ref_toad), Toad {});
+    // Now each resource has its own object account — independent transfers
+}
+```
+
+**Check:**
+1. For every `object::create_object` call: how many resources are stored at that object address?
+2. If multiple resources share an object account, transferring one transfers ALL — is this intended?
+3. Especially dangerous in NFT collections, multi-asset vaults, and gaming items
+4. Each independently-transferable resource should have its own object account
+
+*Source: [Aptos Move Security Guidelines](https://aptos.dev/build/smart-contracts/move-security-guidelines)*
+
+---
+
+## APT-19 — Mutable Reference Swap Attack (mem::swap)
+
+**Description:** Passing `&mut T` to untrusted code (callbacks, function values) allows the callee to use `mem::swap` to **replace the entire value** behind the reference. This bypasses private field protections without ever reading or writing them directly.
+
+**Pattern:**
+```move
+// VULNERABLE — validates asset, passes &mut to untrusted callback, uses asset after
+public fun do_with_fa(
+    user: address, asset: FungibleAsset, hook: |&mut FungibleAsset|
+) {
+    check_metadata(&asset);      // verify it's the expected asset
+    hook(&mut asset);            // untrusted code: can mem::swap a worthless asset in
+    // asset may now be a completely different token!
+    primary_fungible_store::deposit(@treasury, asset);  // deposits worthless asset
+    mint_to(user, fungible_asset::amount(&asset));      // mints real tokens
+}
+
+// SAFE — re-validate after untrusted mutation
+public fun do_with_fa(
+    user: address, asset: FungibleAsset, hook: |&mut FungibleAsset|
+) {
+    check_metadata(&asset);
+    hook(&mut asset);
+    check_metadata(&asset);      // re-check after untrusted code touched it
+    // ...
+}
+```
+
+**Check:**
+1. Any `&mut T` passed to a callback, function value, or cross-trust-boundary call — can the callee swap the whole value?
+2. Invariants validated before passing `&mut` must be **re-validated after** the call returns
+3. Prefer `public(friend)` over `public` for mutation-heavy APIs
+4. Don't pass `&mut` to untrusted code at all if possible
+5. Especially dangerous for `FungibleAsset`, `Coin`, and any value type used in financial logic
+
+*Source: [Aptos Move Security Guidelines — mem::swap / AIP-105](https://aptos.dev/build/smart-contracts/move-security-guidelines)*
+
+---
+
+## APT-20 — Randomness Bias (Test-and-Abort + Undergasing)
+
+**Description:** Aptos provides on-chain randomness via `aptos_framework::randomness`. Two attack vectors allow biasing outcomes:
+
+1. **Test-and-abort:** If a randomness-using function is `public` (not just `entry`), an attacker composes it with an `assert!` that aborts on unfavorable outcomes. Retry until desired result.
+2. **Undergasing:** If favorable and unfavorable code paths consume different gas, attacker sets gas limit that only allows the favorable path to complete. Unfavorable path runs out of gas and aborts.
+
+**Pattern:**
+```move
+// VULNERABLE — public allows composition with abort-on-bad-outcome
+#[lint::allow_unsafe_randomness]
+public entry fun play(user: &signer) {
+    let random = randomness::u64_range(0, 100);
+    if (random == 42) { mint_reward(user); }
+}
+// Attacker: play(attacker); assert!(exists<Reward>(attacker_addr)); // aborts if lost
+
+// VULNERABLE — win() uses less gas than lose(), attacker limits gas to exclude lose path
+#[randomness]
+entry fun play(user: &signer) {
+    let r = randomness::u64_range(0, 100);
+    if (r == 42) { win(user); }    // cheap path
+    else { lose(user); }            // expensive path — runs out of gas
+}
+
+// SAFE — entry only (not public), equal gas paths
+#[randomness]
+entry fun play(user: &signer) {
+    let r = randomness::u64_range(0, 100);
+    // commit random result, resolve in separate tx
+    save_result(user, r);
+}
+```
+
+**Check:**
+1. Functions using `randomness::*` must be `entry` only — NOT `public` or `public entry`
+2. Favorable and unfavorable code paths must consume similar gas
+3. Prefer commit-reveal: save random result in one tx, act on it in a separate tx
+4. Only admin-controlled functions should use `#[lint::allow_unsafe_randomness]`
+
+*Source: [Aptos Move Security Guidelines — Randomness](https://aptos.dev/build/smart-contracts/move-security-guidelines)*
+
+---
+
+## APT-21 — Function Value Reentrancy (Move 2.2+)
+
+**Description:** Since Move language version 2.2, function values (closures) enable reentrancy patterns that were previously impossible. While dispatchable fungible assets are protected by reentrancy locks, **function values passed as callbacks are NOT locked**. A callback can re-enter the calling module via dynamic dispatch.
+
+**Mitigations built into Move:**
+- Re-entered modules **cannot access their own resources** during dynamic dispatch (attempts to `borrow_global` or `move_from` will abort)
+- But attackers can still exploit by altering parameters (e.g., inflating amounts) or swapping values via captured references
+
+**Pattern:**
+```move
+// VULNERABLE — untrusted function value can re-enter and alter amount
+public fun withdraw_operations(
+    user: &signer, amount: u64,
+    f: |address, &Grant, u64|      // attacker-supplied function value
+) {
+    let addr = address_of(user);
+    assert!(balance(addr) >= amount, E_INSUFFICIENT);
+    let g = grant();
+    f(addr, &g, amount);           // attacker ignores amount, passes 100_000_000
+}
+
+// SAFE — bind amount into a non-droppable Grant at creation time
+public fun withdraw_operations(user: &signer, amount: u64, f: |address, Grant|) {
+    let addr = address_of(user);
+    assert!(balance(addr) >= amount, E_INSUFFICIENT);
+    let g = grant(addr, amount);   // state updated + amount fixed inside Grant
+    f(addr, g);                    // Grant controls the amount, not the callback
+}
+```
+
+**Check:**
+1. Any function accepting a function value (`|...|` parameter) — can it re-enter the module?
+2. Validate that state updates happen BEFORE the callback is invoked (checks-effects-interactions)
+3. Don't trust parameters passed to callbacks — bind critical values into non-droppable structs
+4. Check for `mem::swap` attacks on `&mut` references captured by closures
+5. Dispatchable fungible assets are safe (locked against reentrancy) — other function values are NOT
+
+*Source: [Aptos Move Security Guidelines — Function Values](https://aptos.dev/build/smart-contracts/move-security-guidelines)*
+
+---
+
 ## Aptos Verification Checklist
 
 - [ ] All `table::borrow` / `table::remove` preceded by `table::contains`
@@ -463,3 +654,8 @@ struct Registry has key {
 - [ ] No concurrent pending privilege requests that can both be claimed (APT-14)
 - [ ] Ordered map key structs have primary sort field as first declared field (APT-15)
 - [ ] No `SimpleMap` / `SmartTable` for permissionless unbounded data — use `Table` or `BigOrderedMap` (APT-16)
+- [ ] No function returns or exposes `ConstructorRef` — check NFT mints especially (APT-17)
+- [ ] Multiple resources at same object account are intentionally co-transferred (APT-18)
+- [ ] `&mut` references re-validated after passing to untrusted code / callbacks (APT-19)
+- [ ] Randomness functions are `entry` only (not `public`), equal gas on all paths (APT-20)
+- [ ] Function value callbacks cannot re-enter with altered parameters — bind values into structs (APT-21)
