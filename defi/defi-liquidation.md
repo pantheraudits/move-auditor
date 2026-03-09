@@ -350,6 +350,30 @@ public fun liquidate(pos: &mut Position, repayment: Coin<USDC>, min_out: u64): C
 
 ---
 
+## Liquidation Economics Validation
+
+**Before reporting ANY liquidation finding, answer these questions:**
+
+1. **If your "fix" were applied, would liquidation still be profitable for the liquidator?**
+   Calculate: `liquidator_revenue - liquidator_cost` at current market (spot) prices.
+   If your fix makes liquidation unprofitable → the fix causes bad debt → your fix is
+   WORSE than the "bug."
+
+2. **Remember: seized collateral is worth its market (spot) price, not its lagging average.**
+   Using spot for seize reflects reality — the liquidator sells at spot. Using EMA/TWAP
+   for seize would underpay liquidators. Cross-ref: `defi-lending-design-patterns.md` DESIGN-L1.
+
+3. **Does the finding change who benefits, or just how much?**
+   A liquidation that over-seizes by 0.1% is Low severity. A liquidation that can be blocked
+   entirely is High. Scale severity to actual economic impact.
+
+4. **Can the "victim" of the liquidation mechanism avoid the situation?**
+   If a borrower can maintain health factor by adding collateral or repaying, the liquidation
+   mechanism working as designed is not a finding — even if the math slightly favors the
+   liquidator. That's the intended incentive.
+
+---
+
 ## Liquidation Verification Checklist
 
 - [ ] Liquidation bonus exists and exceeds gas costs (DEFI-50)

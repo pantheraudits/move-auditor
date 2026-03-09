@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   author: pantheraudits
   category: security
   tags:
@@ -53,6 +53,7 @@ file in this skill's directory (e.g., if SKILL.md is at
 | `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66 |
 | `defi/defi-auction-clm.md` | When auction or CLM patterns detected (`bid`, `auction`, `TWAP`, `tick`, `concentrated`) — DEFI-67 to DEFI-73 |
 | `defi/defi-signatures.md` | When signature verification detected (`ed25519`, `secp256k1`, `verify_signature`, `nonce`) — DEFI-74 to DEFI-79 |
+| `defi/defi-lending-design-patterns.md` | When lending/borrowing detected — known-good patterns (DESIGN-L1 to L4) that should NOT be reported as bugs |
 | `audit-prompts.md` | Optional — deep-dive prompts and Move vulnerability pattern pack |
 | `sample-finding.md` | Reference for output format — do not load during audits |
 
@@ -133,6 +134,16 @@ Work through every check in `common-move.md`, then the chain-specific reference.
 
 **Do not skip checks.** A clean check is still a check — mark it ✅.
 
+**Dead Code / Unreachable Branch Detection:**
+Before recording any finding that depends on a specific code branch:
+1. **Is the branch reachable?** Trace all callers and all paths that set the condition variable.
+   If a guard like `if (!X) { continue }` exists but X is invariantly true due to
+   constructor/setter validation, the entire path after the guard is dead code.
+2. **TODO comments describe aspirational features, not current bugs.** A TODO saying
+   "skip check for non-collateral" doesn't mean non-collateral assets exist — it means
+   the developer considered adding support but didn't.
+3. **Do not report findings that require executing dead code.**
+
 ---
 
 ### Phase 4 — DeFi & Protocol-Specific Checks
@@ -167,7 +178,7 @@ For each candidate finding, write two concrete stories:
 object/resource interactions, and a quantified outcome — the finding is invalid. Move's
 strict type system means vague "an attacker could..." stories are insufficient.
 
-**Step 2 — Move-Expert Disproof (7 Dimensions)**
+**Step 2 — Move-Expert Disproof (8 Dimensions)**
 
 Systematically challenge each finding against Move's unique properties:
 
@@ -194,11 +205,17 @@ Systematically challenge each finding against Move's unique properties:
    they cannot call `public(package)` functions. Does the finding assume EVM capabilities
    that Move doesn't have?
 
-5. **Precondition Feasibility** — Can the attacker reach the vulnerable state on mainnet?
+5. **Precondition Feasibility & Invariant Reachability** — Can the attacker reach the
+   vulnerable state on mainnet?
    - Sui: shared object consensus ordering — can attacker reliably front-run?
    - Aptos: Block-STM parallel execution — does execution order matter?
    - Gas costs, object creation constraints, minimum amounts, time locks
    - Does attacker need a capability/object they cannot obtain?
+   - **Invariant Reachability:** If the finding requires a field to have value X, find
+     EVERY code path that sets that field and verify X is achievable. Check all
+     constructors, setters, and validation guards. Pay special attention to parameter
+     validation in admin/init functions — they often create invariants that make edge
+     cases unreachable (e.g., `assert!(a < b)` on `u64` makes `b = 0` impossible).
 
 6. **Economic Rationality** — Attack profit vs total cost (gas, flash loan fees, capital
    lockup, slippage, MEV competition). If `cost >= profit`, downgrade to Info. For Sui
@@ -212,15 +229,54 @@ Systematically challenge each finding against Move's unique properties:
    - Admin pause mechanisms blocking the attack path
    - Move Prover `spec` blocks enforcing invariants
 
+8. **Counterfactual Fix Test** — Apply your recommended fix mentally:
+   - Does the fix change the **observable behavior**? If the transaction still aborts,
+     the same funds are still locked, the same DoS occurs — the finding is cosmetic.
+   - If downstream code would ALSO block the scenario independently of the bug,
+     the bug has no incremental impact. Trace the FULL execution path PAST the
+     buggy line — if the function fails at line N+5 anyway, the bug at line N
+     is informational at best.
+   - "Same value, different error code" is not a vulnerability — both produce
+     transaction abort with identical user-facing outcome.
+
 **Step 3 — Label Each Finding**
 
-- **VALID** — Survives all 7 dimensions. Exploitable on mainnet. Include at stated severity.
+- **VALID** — Survives all 8 dimensions. Exploitable on mainnet. Include at stated severity.
 - **QUESTIONABLE** — Partially validated. Needs manual PoC on testnet. Flag with the
   uncertain dimension for human reviewer.
 - **DISMISSED** — Disproven by Move's type system, object model, call path, or economics.
   Document in "Verified Clean Checks" with the disproof dimension and reasoning.
 - **OVERCLASSIFIED** — Real issue, severity inflated. Downgrade with reasoning
   (e.g., "Critical → Medium: requires admin key compromise").
+
+**Step 4 — Mandatory Kill Questions**
+
+Every finding labeled VALID or QUESTIONABLE must answer ALL of these. If any answer
+is "no" or uncertain, downgrade or dismiss:
+
+1. **Can I construct the precondition state through valid protocol operations?**
+   Write the EXACT sequence of transactions. If you can't → INVALID.
+2. **Does my recommended fix change observable behavior?**
+   Apply the fix. Does the tx succeed now? Does the user get different output?
+   If behavior is identical → INFORMATIONAL at best.
+3. **For any function I claim "reverts when it shouldn't" — what would it DO if it
+   didn't revert?** Would the result be meaningful? (e.g., ADL on zero-collateral:
+   even without revert, seized=0, repaid=0 → no-op.)
+4. **Is this a pattern used by established protocols (Compound, Aave, MakerDAO)?**
+   If yes, load `defi/defi-lending-design-patterns.md` and check whether this is a
+   known-good design. Explain why THIS protocol's context differs if reporting.
+5. **Who loses money, how much, and under what conditions?**
+   If you can't name a specific dollar impact and a specific victim → downgrade severity.
+
+**Step 5 — Root-Cause Deduplication**
+
+Before finalizing the finding list, group by the single LINE OF CODE that would
+need to change, not by downstream effect:
+- "Division by zero when X is zero" and "Function reverts when X is zero" → SAME finding
+- "EMA/spot asymmetry" reported as tolerance bypass vs withdrawal blocking → SAME finding
+- "Cash not updated" reported as exchange rate issue vs liquidity check issue → SAME finding
+
+Keep only the highest-impact framing of each root cause.
 
 **Output rules:** Only VALID and QUESTIONABLE findings proceed to Phase 6.
 DISMISSED findings go to "Verified Clean Checks" with dismissal reason.

@@ -11,6 +11,41 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [2.3.0] — 2026-03-10
+
+### False Positive Reduction — Benchmarking-driven verification improvements
+
+Based on live benchmarking results that identified systematic false positive patterns,
+this release strengthens the verification and triage phase with concrete kill mechanisms.
+
+**SKILL.md — Phase 5 verification overhaul:**
+- Enhanced Dimension 5 (Precondition Feasibility) with **Invariant Reachability Check**:
+  trace every precondition back to constructors/setters to verify the required state is
+  actually achievable on-chain
+- Added **Dimension 8 — Counterfactual Fix Test**: apply the recommended fix mentally and
+  verify it actually changes observable behavior. "Same outcome, different error code" is
+  not a vulnerability
+- Added **Mandatory Kill Questions** (Step 4): 5 concrete questions every VALID finding must
+  answer — precondition construction, fix impact, established pattern check, victim/dollar
+  quantification
+- Added **Root-Cause Deduplication** (Step 5): group findings by the single line of code that
+  would need to change, not by downstream effect
+- Added **Dead Code / Unreachable Branch Detection** to Phase 3: verify code branches are
+  reachable before recording findings; TODO comments are aspirational, not current bugs
+
+**New file — `defi/defi-lending-design-patterns.md`:**
+- DESIGN-L1: Spot prices for liquidation seize, EMA for eligibility (Compound/Aave standard)
+- DESIGN-L2: Flash loan not updating accounting fields (hot potato guarantees correctness)
+- DESIGN-L3: Blocking borrows when cash < reserve (protective, not DoS)
+- DESIGN-L4: Asymmetric EMA/spot divergence formulas (intentional risk asymmetry)
+
+**`defi/defi-liquidation.md` — Liquidation Economics Validation:**
+- New section requiring economic viability analysis before reporting liquidation findings
+- If the recommended fix makes liquidation unprofitable → the fix causes bad debt → worse
+  than the "bug"
+
+---
+
 ## [2.2.0] — 2026-03-09
 
 ### Expanded Pattern Coverage — 11 new patterns from community research
