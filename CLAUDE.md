@@ -17,8 +17,14 @@ The skill lives in `move-auditor/` and is installed by copying that directory to
 1. **New common checks** go in `move-auditor/common-move.md`
 2. **Sui-specific checks** go in `move-auditor/sui-patterns.md` — numbered `SUI-XX`
 3. **Aptos-specific checks** go in `move-auditor/aptos-patterns.md` — numbered `APT-XX`
-4. **DeFi vectors** go in `move-auditor/defi-vectors.md` — numbered `DEFI-XX`
-5. **New reference files** (e.g., a vulnerability database) go in `move-auditor/`
+4. **DeFi cross-cutting checks** go in `move-auditor/defi-vectors.md` — DEFI-01 to DEFI-10
+5. **DeFi subcategory checks** go in `move-auditor/defi/defi-<category>.md` — DEFI-11+
+   - `defi-staking.md` (DEFI-11–16), `defi-oracle.md` (DEFI-17–24)
+   - `defi-lending.md` (DEFI-25–34), `defi-math-precision.md` (DEFI-35–42)
+   - `defi-slippage.md` (DEFI-43–49), `defi-liquidation.md` (DEFI-50–66)
+   - `defi-auction-clm.md` (DEFI-67–73), `defi-signatures.md` (DEFI-74–79)
+   - Next available ID: **DEFI-80**
+6. **New reference files** (e.g., a vulnerability database) go in `move-auditor/`
    and must be referenced from `SKILL.md` with a load instruction
 
 ---

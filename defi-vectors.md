@@ -5,6 +5,32 @@ oracles, or any financial logic. These patterns apply to both Sui and Aptos Move
 
 ---
 
+## DeFi Subcategory Detection
+
+After loading this file, detect which DeFi subcategories the protocol uses and load
+the corresponding deep-dive reference files from the `defi/` subdirectory. **Multiple
+files may apply** — a lending protocol typically needs lending + liquidation + oracle.
+
+| Subcategory | Detect when code contains... | Load file |
+|-------------|------------------------------|-----------|
+| Staking/Yield | `stake`, `unstake`, `reward_per_share`, `reward_per_token`, `accumulator`, `farming` | `defi/defi-staking.md` |
+| Oracle | `get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`, `price_info` | `defi/defi-oracle.md` |
+| Lending/Borrowing | `borrow`, `repay`, `collateral`, `health_factor`, `loan`, `debt` | `defi/defi-lending.md` |
+| Math/Precision | Complex fee/share/interest math, `PRECISION`, `DECIMAL`, `RAY`, `WAD` | `defi/defi-math-precision.md` |
+| Slippage/DEX | `swap`, `min_amount_out`, `slippage`, `deadline`, `amm`, `pool` | `defi/defi-slippage.md` |
+| Liquidation | `liquidat`, `seize`, `health_factor`, `bad_debt`, `insurance_fund` | `defi/defi-liquidation.md` |
+| Auction/CLM | `bid`, `auction`, `TWAP`, `tick`, `concentrated_liquidity`, `rebalance` | `defi/defi-auction-clm.md` |
+| Signatures | `ed25519`, `secp256k1`, `verify_signature`, `ecrecover`, `nonce` | `defi/defi-signatures.md` |
+
+---
+
+## Cross-Cutting DeFi Checks (DEFI-01 to DEFI-10)
+
+The checks below apply across all DeFi subcategories. For detailed, category-specific
+patterns with full code examples, see the `defi/*.md` files listed above.
+
+---
+
 ## DEFI-01 — Oracle Manipulation
 
 **Description:** Price oracles that can be manipulated by a single large transaction.
@@ -223,13 +249,26 @@ public entry fun swap(
 
 ## DeFi Verification Checklist
 
-- [ ] All price reads use TWAP or include staleness check
-- [ ] First depositor attack mitigated (dead shares at init)
-- [ ] Rounding always favors protocol, not user
-- [ ] Solvency check on every borrow and withdrawal
-- [ ] Reward calculation uses per-token accumulator correctly
-- [ ] Liquidation profitable for all realistic collateral values
-- [ ] All swap functions have min_amount_out parameter
+**Cross-cutting (always check):**
+- [ ] All price reads use TWAP or include staleness check (→ `defi/defi-oracle.md`)
+- [ ] First depositor attack mitigated (dead shares at init) (→ `defi/defi-staking.md`)
+- [ ] Rounding always favors protocol, not user (→ `defi/defi-math-precision.md`)
+- [ ] Solvency check on every borrow and withdrawal (→ `defi/defi-lending.md`)
+- [ ] Reward calculation uses per-token accumulator correctly (→ `defi/defi-staking.md`)
+- [ ] Liquidation profitable for all realistic collateral values (→ `defi/defi-liquidation.md`)
+- [ ] All swap functions have `min_amount_out` parameter (→ `defi/defi-slippage.md`)
 - [ ] Interest rate model has maximum cap and no overflow
 - [ ] Governance has timelock
 - [ ] Bridge messages have replay protection
+
+**Subcategory-specific (check when loaded):**
+- [ ] Staking: Flash deposit/withdraw griefing mitigated (DEFI-14)
+- [ ] Oracle: Different staleness thresholds per feed (DEFI-18)
+- [ ] Oracle: Depeg scenarios handled for wrapped assets (DEFI-21)
+- [ ] Lending: Pause mechanism is symmetric (repay ↔ liquidate) (DEFI-28)
+- [ ] Lending: Token denylist/freeze cannot permanently block operations (DEFI-29)
+- [ ] Math: Division always after multiplication (DEFI-35)
+- [ ] Math: Time units consistent — Sui ms, Aptos seconds (DEFI-41)
+- [ ] Slippage: No hardcoded slippage tolerance (DEFI-45)
+- [ ] Liquidation: Grace period before liquidation after unpause (DEFI-64)
+- [ ] Signatures: Chain ID included in signed messages (DEFI-75)
