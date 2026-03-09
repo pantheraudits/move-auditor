@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   author: pantheraudits
   category: security
   tags:
@@ -42,8 +42,8 @@ file in this skill's directory (e.g., if SKILL.md is at
 | File | When to load |
 |------|-------------|
 | `common-move.md` | **Always** — chain-agnostic checks (sections 1–10), verification checklist |
-| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-22 |
-| `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-21 |
+| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-27 |
+| `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-23 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`) — DEFI-11 to DEFI-16 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |

@@ -249,6 +249,44 @@ public entry fun initialize(admin: &signer, config: Config) {
 **Risk:** In an active exploit, there's no way to halt the protocol.
 **Check:** Note absence of pause mechanism. Not a vulnerability itself, but an operational risk worth flagging as Info.
 
+### 7.4 Incomplete Pause Coverage
+**Pattern:** Pause flag exists but is not checked on ALL public/entry functions.
+**Risk:** Attacker routes through an unpaused code path while the protocol believes it's halted.
+
+```move
+// VULNERABLE — pause checked on deposit but not on withdraw
+public entry fun deposit(state: &State, amount: u64) {
+    assert!(!state.paused, E_PAUSED); // checked here
+}
+public entry fun withdraw(state: &State, amount: u64) {
+    // Missing pause check — attacker withdraws during "pause"
+}
+
+// SAFE — every state-mutating function checks pause
+public entry fun withdraw(state: &State, amount: u64) {
+    assert!(!state.paused, E_PAUSED);
+    // ... withdrawal logic
+}
+```
+
+**Check:** Grep `paused` or `is_paused`. List every public/entry function. Verify EACH one checks the pause flag. Admin emergency functions may intentionally bypass pause.
+
+### 7.5 Unpinned Dependencies in Move.toml
+**Pattern:** Git dependencies in `Move.toml` without pinned `rev` or `tag`.
+**Risk:** Dependency can change silently — supply chain attack imports malicious code or breaking changes.
+
+```toml
+# VULNERABLE — unpinned, tracks latest commit on main
+[dependencies]
+SomeProtocol = { git = "https://github.com/example/protocol.git", subdir = "contracts" }
+
+# SAFE — pinned to specific commit
+[dependencies]
+SomeProtocol = { git = "https://github.com/example/protocol.git", subdir = "contracts", rev = "abc123def" }
+```
+
+**Check:** Open `Move.toml`. Every git dependency must have `rev = "..."` or `tag = "..."`. Flag unpinned deps as Medium (supply chain risk).
+
 ---
 
 ## 8. Type Safety & Value Validation
@@ -449,6 +487,51 @@ ThalaSwapV2 (double-upscaling in pay_flashloan — Critical)*
 Scallop (flash loan fees trapped — High),
 SuiPad (unused tokens stuck in vault — High)*
 
+### 9.4 Self-Transfer Snapshot Manipulation
+**Pattern:** User transfers tokens to themselves, triggering fee/reward snapshot updates without real economic activity.
+**Risk:** If fee collection or reward distribution logic fires on every transfer (including self-transfers), an attacker can manipulate accumulators, claim unearned rewards, or force fee distributions.
+
+```move
+// VULNERABLE — transfer triggers reward snapshot, no self-transfer check
+public fun transfer(pool: &mut Pool, from: address, to: address, amount: u64) {
+    update_reward_snapshot(pool, from);  // triggers on self-transfer too
+    update_reward_snapshot(pool, to);
+    move_tokens(pool, from, to, amount);
+}
+
+// SAFE — block self-transfers or skip snapshot on self-transfer
+public fun transfer(pool: &mut Pool, from: address, to: address, amount: u64) {
+    assert!(from != to, E_SELF_TRANSFER);
+    update_reward_snapshot(pool, from);
+    update_reward_snapshot(pool, to);
+    move_tokens(pool, from, to, amount);
+}
+```
+
+**Check:** Search for transfer/send functions. Does `from == to` trigger any side effects (rewards, fees, snapshots)?
+
+### 9.5 Round-Trip Profitability
+**Pattern:** `deposit(X)` followed by immediate `withdraw(all)` returns more than X.
+**Risk:** Rounding asymmetry, fee accounting gaps, or share calculation bugs allow value extraction through repeated deposit/withdraw cycles.
+
+```move
+// VULNERABLE — deposit rounds UP shares, withdraw rounds UP tokens
+public fun deposit(pool: &mut Pool, amount: u64): u64 {
+    let shares = (amount * pool.total_shares + pool.total_assets - 1) / pool.total_assets; // rounds UP
+    pool.total_shares = pool.total_shares + shares;
+    shares
+}
+public fun withdraw(pool: &mut Pool, shares: u64): u64 {
+    let amount = (shares * pool.total_assets + pool.total_shares - 1) / pool.total_shares; // rounds UP
+    pool.total_shares = pool.total_shares - shares;
+    amount // user gets MORE than deposited
+}
+
+// SAFE — deposit rounds DOWN (fewer shares), withdraw rounds DOWN (fewer tokens)
+```
+
+**Check:** Invariant: `withdraw(deposit(X)) <= X` must always hold. Deposit should round DOWN (protocol keeps dust), withdraw should round DOWN (protocol keeps dust). Cross-ref: DEFI-39
+
 ---
 
 ## 10. Control Flow & Protocol Logic
@@ -588,6 +671,8 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] No stale reads before external calls that internally mutate the read value (6.4)
 - [ ] Initialization is one-time-only
 - [ ] Upgrade authority is governed or noted
+- [ ] Pause flag checked on ALL public/entry functions, not just some (7.4)
+- [ ] All git dependencies in Move.toml pinned with `rev` or `tag` (7.5)
 - [ ] All generic type parameters validated against stored/expected types (8.1)
 - [ ] Multi-return functions return values in documented order (8.2)
 - [ ] No self-referential or always-true validation checks (8.3)
@@ -595,6 +680,8 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] Every claim/refund/withdraw updates state to prevent re-invocation (9.1)
 - [ ] No mixed scaled/unscaled values in arithmetic (9.2)
 - [ ] Every fee collection has a corresponding withdrawal function (9.3)
+- [ ] Self-transfers cannot manipulate reward/fee snapshots (9.4)
+- [ ] Round-trip `deposit→withdraw` never returns more than input (9.5)
 - [ ] No circular/recursive function call chains (10.1)
 - [ ] Stake/unstake cannot manipulate reward accumulators in same transaction (10.2)
 - [ ] All time comparisons use correct operator direction (10.3)

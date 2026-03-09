@@ -49,10 +49,11 @@ cp -r . ~/.claude/commands/move-auditor
 
 The skill also **auto-activates** when `.move` files are present or when you ask about Move security. It will:
 
-1. Detect chain (Sui or Aptos) automatically
-2. Map the codebase structure
-3. Run a full vulnerability scan
-4. Produce a structured audit report with severity, location, PoC scenario, and fix
+1. Detect chain (Sui or Aptos) and load relevant patterns
+2. Map the codebase structure and attack surface
+3. Run a full vulnerability scan (130+ patterns across chain-agnostic, chain-specific, and DeFi checks)
+4. Verify & triage every finding through a Move-expert validation pass (7 disproof dimensions)
+5. Produce a structured audit report with severity, confidence, PoC scenario, and fix
 
 **Read the full write-up:** [The Move Auditor — Blog Post](https://pantheraudits.com/blog/the-move-auditor.html)
 
@@ -61,17 +62,26 @@ The skill also **auto-activates** when `.move` files are present or when you ask
 
 ```
 move-auditor/
-├── SKILL.md                     # Orchestrator — workflow, phases, report format
+├── SKILL.md                     # Orchestrator — 6-phase workflow with verify & triage
 ├── common-move.md               # Chain-agnostic Move security checks + checklist
-├── sui-patterns.md              # Sui-specific vulnerability patterns (SUI-01 to SUI-10)
-├── aptos-patterns.md            # Aptos-specific vulnerability patterns (APT-01 to APT-11)
-├── defi-vectors.md              # DeFi attack vectors for Move protocols
+├── sui-patterns.md              # Sui-specific patterns (SUI-01 to SUI-27)
+├── aptos-patterns.md            # Aptos-specific patterns (APT-01 to APT-23)
+├── defi-vectors.md              # DeFi attack vectors (DEFI-01 to DEFI-10) + subcategory router
+├── defi/
+│   ├── defi-staking.md          # Staking/yield patterns (DEFI-11 to DEFI-16)
+│   ├── defi-oracle.md           # Oracle patterns (DEFI-17 to DEFI-24)
+│   ├── defi-lending.md          # Lending/borrowing patterns (DEFI-25 to DEFI-34)
+│   ├── defi-math-precision.md   # Math & precision patterns (DEFI-35 to DEFI-42)
+│   ├── defi-slippage.md         # Slippage & DEX patterns (DEFI-43 to DEFI-49)
+│   ├── defi-liquidation.md      # Liquidation patterns (DEFI-50 to DEFI-66)
+│   ├── defi-auction-clm.md      # Auction & CLM patterns (DEFI-67 to DEFI-73)
+│   └── defi-signatures.md       # Signature patterns (DEFI-74 to DEFI-79)
 ├── audit-prompts.md             # Deep-dive prompts + vulnerability pattern pack
 └── sample-finding.md            # Example audit output showing expected format
 ```
 
-Reference files are loaded **on demand** — the agent reads them when the chain is detected,
-keeping the initial context window lean.
+Reference files are loaded **on demand** — the agent reads only what's relevant to the
+detected chain and protocol type, keeping the initial context window lean.
 
 
 ## Disclaimer

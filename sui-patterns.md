@@ -703,6 +703,197 @@ public fun liquidate(position: &mut Position, pool: &mut dex_v1::Pool) {
 
 ---
 
+## SUI-23 — Shared Object Version Check (Upgrade Safety)
+
+**Description:** Shared objects must carry a `version: u64` field so upgraded code can
+reject stale layouts. Without version gating, upgraded functions operate on objects
+with old field layouts, causing deserialization failures or silent data corruption.
+
+**Pattern:**
+```move
+// VULNERABLE — shared object has no version field
+struct Pool has key {
+    id: UID,
+    balance: Balance<SUI>,
+    fee_bps: u64,
+}
+
+// After upgrade adds a new field, existing Pool objects lack it
+// borrow_global / dynamic access silently reads garbage or aborts
+
+// SAFE — version-gated shared object
+const CURRENT_VERSION: u64 = 1;
+
+struct Pool has key {
+    id: UID,
+    version: u64,
+    balance: Balance<SUI>,
+    fee_bps: u64,
+}
+
+public fun swap(pool: &mut Pool, input: Coin<SUI>): Coin<USDC> {
+    assert!(pool.version == CURRENT_VERSION, E_WRONG_VERSION);
+    // ...
+}
+
+// Migration function bumps version after upgrade
+public fun migrate_pool(pool: &mut Pool, cap: &AdminCap) {
+    assert!(pool.version == CURRENT_VERSION - 1, E_ALREADY_MIGRATED);
+    pool.version = CURRENT_VERSION;
+}
+```
+
+**Check:**
+1. Every shared object struct must have a `version: u64` field
+2. Every `public` function taking `&mut SharedObj` must assert `obj.version == CURRENT_VERSION`
+3. A migration function must exist to bump versions post-upgrade
+4. Cross-ref: SUI-22 (dependency upgrade trap)
+
+---
+
+## SUI-24 — Publisher Object Not Secured
+
+**Description:** The `Publisher` object (from `sui::package`) proves package authorship
+and enables creating `Display` objects, claiming type ownership, and configuring
+transfer policies. If not transferred to admin/governance in `init`, anyone with
+access can spoof metadata or bypass royalties.
+
+**Pattern:**
+```move
+// VULNERABLE — Publisher left as owned object, transferred to deployer without protection
+fun init(otw: MY_MODULE, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    transfer::public_transfer(publisher, tx_context::sender(ctx));
+    // Deployer's wallet key = single point of failure
+}
+
+// SAFE — Publisher stored in a governed wrapper or destroyed if unneeded
+fun init(otw: MY_MODULE, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    // Option A: wrap in admin-gated object
+    let gov = GovernedPublisher { id: object::new(ctx), publisher };
+    transfer::share_object(gov);
+    // Option B: if Display is already set up and Publisher isn't needed
+    // package::burn_publisher(publisher);
+}
+```
+
+**Check:**
+1. Is `Publisher` transferred to a secure multisig/governance address?
+2. If stored as owned object — is key compromise considered?
+3. If `Publisher` is not needed post-init, is it burned via `package::burn_publisher`?
+
+---
+
+## SUI-25 — Dynamic Field Cleanup Before Object Deletion
+
+**Description:** Dynamic fields attached to an object are NOT automatically removed
+when the parent UID is deleted. Values in orphaned dynamic fields become permanently
+inaccessible — causing permanent fund loss if they hold `Balance<T>` or `Coin<T>`.
+
+**Pattern:**
+```move
+// VULNERABLE — deletes UID with dynamic fields still attached
+public fun close_vault(vault: Vault) {
+    let Vault { id, owner: _ } = vault;
+    // dynamic_field holding Balance<SUI> is now orphaned forever
+    object::delete(id);
+}
+
+// SAFE — remove all dynamic fields before deletion
+public fun close_vault(vault: Vault): Balance<SUI> {
+    let Vault { id, owner: _ } = vault;
+    let balance = dynamic_field::remove<String, Balance<SUI>>(&mut id, b"funds".to_string());
+    // Remove ALL other dynamic fields...
+    object::delete(id);
+    balance
+}
+```
+
+**Check:**
+1. Before any `object::delete(uid)`, verify ALL dynamic fields/objects are removed
+2. If the set of dynamic field keys is unbounded, deletion may be impossible — flag as design risk
+3. Check for `Balance<T>`, `Coin<T>`, or any value type with `store` in dynamic fields
+4. Cross-ref: SUI-06 (dynamic field injection)
+
+---
+
+## SUI-26 — Kiosk Transfer Policy Bypass
+
+**Description:** NFTs in a `Kiosk` are protected by `TransferPolicy` rules (royalties,
+allowlist checks). If the `KioskOwnerCap` is not properly secured, or if `purchase`
+is called without enforcing all policy rules, NFTs can be extracted without paying
+royalties or passing allowlist checks.
+
+**Pattern:**
+```move
+// VULNERABLE — KioskOwnerCap freely transferable, bypass via self-purchase
+fun init(ctx: &mut TxContext) {
+    let (kiosk, cap) = kiosk::new(ctx);
+    transfer::public_share_object(kiosk);
+    transfer::public_transfer(cap, tx_context::sender(ctx));
+    // cap holder can list at 0 price and self-purchase, skipping royalty
+}
+
+// SAFE — cap stored securely, TransferPolicy enforced
+fun init(ctx: &mut TxContext) {
+    let (kiosk, cap) = kiosk::new(ctx);
+    transfer::public_share_object(kiosk);
+    // Store cap in governed wrapper — not directly transferable
+    let gov = GovernedKiosk { id: object::new(ctx), cap };
+    transfer::share_object(gov);
+}
+```
+
+**Check:**
+1. Is `KioskOwnerCap` stored securely (not freely transferable)?
+2. Are ALL `TransferPolicy` rules enforced on every extraction path?
+3. Can owner list at price 0 and self-purchase to bypass royalties?
+4. Check `kiosk::list` and `kiosk::purchase` call patterns
+
+---
+
+## SUI-27 — UpgradeCap Lifecycle Mismanagement
+
+**Description:** Two opposite risks: (a) `UpgradeCap` destroyed prematurely via
+`sui::package::make_immutable` — makes the package permanently immutable before
+critical bugs can be fixed; (b) upgrade policy is more permissive than necessary
+(`compatible` when `additive_only` or `dep_only` suffices), allowing dangerous
+changes to function signatures and struct layouts.
+
+**Pattern:**
+```move
+// RISK A — premature immutability
+fun init(ctx: &mut TxContext) {
+    // Package can never be fixed if a critical bug is found
+    package::make_immutable(upgrade_cap);
+}
+
+// RISK B — overly permissive upgrade policy
+fun init(ctx: &mut TxContext) {
+    // `compatible` allows changing function bodies + adding functions
+    // Could weaken security checks in existing functions
+    transfer::public_transfer(upgrade_cap, tx_context::sender(ctx));
+}
+
+// SAFE — restrict to minimum required policy, held by governance
+fun init(ctx: &mut TxContext) {
+    // Restrict to additive-only: can add new functions but not change existing ones
+    package::only_additive_upgrades(&mut upgrade_cap);
+    // Or even stricter: only dependency changes
+    // package::only_dep_upgrades(&mut upgrade_cap);
+    transfer::public_transfer(upgrade_cap, @governance_multisig);
+}
+```
+
+**Check:**
+1. Is `UpgradeCap` held by multisig/governance (not a single EOA)?
+2. Is the upgrade policy the minimum required (`dep_only` > `additive_only` > `compatible`)?
+3. If `make_immutable` is called — is the protocol mature enough? Are all dependencies also immutable?
+4. Cross-ref: SUI-22 (immutable + upgradeable dep = bricking risk)
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -727,3 +918,8 @@ public fun liquidate(position: &mut Position, pool: &mut dex_v1::Pool) {
 - [ ] Flash loan receipts validated against originating pool before repayment (SUI-20)
 - [ ] No false-positive denylist findings — enforcement is validator-level, not Move code; check epoch gap for receiving (SUI-21)
 - [ ] All external dependencies checked for upgradeability — immutable protocol + upgradeable dep = bricking risk (SUI-22)
+- [ ] All shared objects have `version: u64` field; all public functions assert version (SUI-23)
+- [ ] `Publisher` object transferred to governance or burned post-init (SUI-24)
+- [ ] All dynamic fields removed before `object::delete(uid)` — no orphaned balances (SUI-25)
+- [ ] `KioskOwnerCap` stored securely; `TransferPolicy` rules enforced on every extraction (SUI-26)
+- [ ] `UpgradeCap` held by governance with minimum-required policy; premature immutability flagged (SUI-27)

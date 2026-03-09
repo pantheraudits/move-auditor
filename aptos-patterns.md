@@ -637,6 +637,112 @@ public fun withdraw_operations(user: &signer, amount: u64, f: |address, Grant|) 
 
 ---
 
+## APT-22 — Struct Layout Change on Upgrade
+
+**Description:** When a module is upgraded on Aptos, existing on-chain resources retain
+their original binary layout. If struct fields are reordered, removed, or types changed,
+deserialization of existing resources fails — all existing user positions become
+permanently inaccessible.
+
+**Pattern:**
+```move
+// v1 — original struct (stored on-chain for all users)
+struct Position has key, store {
+    owner: address,
+    amount: u64,
+    debt: u64,
+}
+
+// v2 VULNERABLE — field reordered + type changed, existing resources break
+struct Position has key, store {
+    debt: u128,       // was u64, now u128 — binary layout mismatch
+    amount: u64,
+    owner: address,   // reordered — deserialization reads wrong bytes
+}
+
+// v2 SAFE — append-only changes, existing layout preserved
+struct Position has key, store {
+    owner: address,   // same order
+    amount: u64,      // same type
+    debt: u64,        // same type
+}
+
+// If migration is needed, use a new struct + migration function
+struct PositionV2 has key, store {
+    owner: address,
+    amount: u64,
+    debt: u128,       // upgraded field
+}
+
+public entry fun migrate_position(user: &signer) acquires Position {
+    let old = move_from<Position>(signer::address_of(user));
+    let Position { owner, amount, debt } = old;
+    move_to(user, PositionV2 { owner, amount, debt: (debt as u128) });
+}
+```
+
+**Check:**
+1. Compare pre- and post-upgrade struct definitions — field order and types must be preserved
+2. If layout changes are needed, a separate V2 struct + migration function must exist
+3. Verify migration function handles all existing users (or is callable per-user)
+4. New fields can only be appended at the end (append-only compatibility)
+
+---
+
+## APT-23 — Resource Account Signer Scope Creep
+
+**Description:** A `SignerCapability` for a resource account grants unrestricted signer
+access to that account. If multiple modules store resources at the same resource account
+address, a `SignerCapability` holder can manipulate ALL resources there — not just the
+ones their module created.
+
+**Pattern:**
+```move
+// VULNERABLE — two modules share one resource account
+// Module A creates the resource account and stores its signer cap
+public fun init_module_a(deployer: &signer) {
+    let (resource_signer, cap) = account::create_resource_account(deployer, b"shared");
+    move_to(&resource_signer, ModuleAState { value: 0 });
+    move_to(deployer, SignerStore { cap }); // Module A holds signer cap
+}
+
+// Module B stores resources at the SAME resource account address
+public fun init_module_b(admin: &signer) acquires SignerStore {
+    let cap = &borrow_global<SignerStore>(@module_a).cap;
+    let resource_signer = account::create_signer_with_capability(cap);
+    move_to(&resource_signer, ModuleBState { balance: 1000 }); // co-located
+}
+
+// Module A can now manipulate Module B's resources!
+public fun steal(admin: &signer) acquires SignerStore, ModuleBState {
+    let cap = &borrow_global<SignerStore>(@module_a).cap;
+    let signer = account::create_signer_with_capability(cap);
+    let state = move_from<ModuleBState>(signer::address_of(&signer));
+    // Module A just stole Module B's state
+}
+
+// SAFE — each module uses its own resource account
+public fun init_module_a(deployer: &signer) {
+    let (resource_signer, cap) = account::create_resource_account(deployer, b"module_a");
+    move_to(&resource_signer, ModuleAState { value: 0 });
+    move_to(deployer, SignerStoreA { cap });
+}
+
+public fun init_module_b(deployer: &signer) {
+    let (resource_signer, cap) = account::create_resource_account(deployer, b"module_b");
+    move_to(&resource_signer, ModuleBState { balance: 1000 });
+    move_to(deployer, SignerStoreB { cap });
+}
+```
+
+**Check:**
+1. Verify each resource account is used by exactly one module
+2. If shared, verify that all modules with `SignerCapability` access are trusted
+3. Check that `SignerCapability` is stored privately — not accessible by other modules
+4. Cross-ref: APT-04 (signer capability abuse)
+
+---
+
 ## Aptos Verification Checklist
 
 - [ ] All `table::borrow` / `table::remove` preceded by `table::contains`
@@ -659,3 +765,5 @@ public fun withdraw_operations(user: &signer, amount: u64, f: |address, Grant|) 
 - [ ] `&mut` references re-validated after passing to untrusted code / callbacks (APT-19)
 - [ ] Randomness functions are `entry` only (not `public`), equal gas on all paths (APT-20)
 - [ ] Function value callbacks cannot re-enter with altered parameters — bind values into structs (APT-21)
+- [ ] Struct field order and types preserved across upgrades — append-only or migration function exists (APT-22)
+- [ ] Each resource account used by exactly one module — no cross-module signer scope creep (APT-23)

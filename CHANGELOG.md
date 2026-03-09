@@ -11,6 +11,34 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [2.2.0] — 2026-03-09
+
+### Expanded Pattern Coverage — 11 new patterns from community research
+
+Integrated high-value patterns from [forefy/MOVE-CHECKS.md](https://github.com/forefy/.context/blob/main/skills/smart-contract-audit/MOVE-CHECKS.md),
+deduplicated against existing checks, and placed in the correct chain-specific files.
+
+**common-move.md** — 4 new chain-agnostic patterns:
+- 7.4 Incomplete Pause Coverage — pause flag not checked on all public functions
+- 7.5 Unpinned Dependencies in Move.toml — supply chain risk from unversioned git deps
+- 9.4 Self-Transfer Snapshot Manipulation — self-transfer games fee/reward snapshots
+- 9.5 Round-Trip Profitability — `withdraw(deposit(X)) <= X` invariant test
+
+**sui-patterns.md** — 5 new Sui-specific patterns (SUI-23 to SUI-27):
+- SUI-23: Shared Object Version Check (upgrade safety)
+- SUI-24: Publisher Object Not Secured (Display/royalty spoofing)
+- SUI-25: Dynamic Field Cleanup Before Object Deletion (orphaned fund loss)
+- SUI-26: Kiosk Transfer Policy Bypass (royalty evasion)
+- SUI-27: UpgradeCap Lifecycle Mismanagement (premature immutability / overly permissive policy)
+
+**aptos-patterns.md** — 2 new Aptos-specific patterns (APT-22 to APT-23):
+- APT-22: Struct Layout Change on Upgrade (binary deserialization failure)
+- APT-23: Resource Account Signer Scope Creep (cross-module resource manipulation)
+
+All verification checklists updated with corresponding new items.
+
+---
+
 ## [2.1.0] — 2026-03-09
 
 ### Move-Expert Verify & Triage Phase
