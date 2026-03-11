@@ -47,10 +47,10 @@ file in this skill's directory (e.g., if SKILL.md is at
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`) — DEFI-11 to DEFI-16 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
-| `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34 |
+| `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82 |
 | `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, fee/share math) — DEFI-35 to DEFI-42 |
 | `defi/defi-slippage.md` | When swap/DEX patterns detected (`swap`, `min_amount_out`, `slippage`, AMM pool) — DEFI-43 to DEFI-49 |
-| `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66 |
+| `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81 |
 | `defi/defi-auction-clm.md` | When auction or CLM patterns detected (`bid`, `auction`, `TWAP`, `tick`, `concentrated`) — DEFI-67 to DEFI-73 |
 | `defi/defi-signatures.md` | When signature verification detected (`ed25519`, `secp256k1`, `verify_signature`, `nonce`) — DEFI-74 to DEFI-79 |
 | `defi/defi-lending-design-patterns.md` | When lending/borrowing detected — known-good patterns (DESIGN-L1 to L4) that should NOT be reported as bugs |
@@ -158,9 +158,42 @@ If the protocol involves tokens, swaps, lending, staking, or oracles:
 
 ---
 
-### Phase 5 — Verify & Triage (Move-Expert Validation)
+### Phase 5 — Cross-Module Interaction Scan
 
-Before reporting, every candidate finding from Phases 3-4 must survive a Move-expert
+After completing per-file analysis, explicitly trace these interaction pairs.
+For each pair, ask: does function A in module X leave module Y in an
+inconsistent or permanently broken state?
+
+Required pairs to check in every lending protocol audit:
+
+1. **repay ↔ rewards/liquidity_mining** —
+   When repay fully clears the last debt on an obligation (permissionless path),
+   is the reward tracker for that obligation cleaned up?
+   If not: orphaned tracker may block pool closure. (→ common-move.md 11.1)
+
+2. **liquidate ↔ reserve (collateral reserve)** —
+   Does the liquidation path check that the collateral reserve has
+   idle cash >= seize_amount before calling `balance::split()` or equivalent?
+   If not: liquidation reverts at high utilization → bad debt accumulates. (→ DEFI-81)
+
+3. **adl ↔ emode** —
+   Does the ADL entry condition and the ADL stop condition both read total borrows
+   from the same source (both reserve-level OR both emode-group-level)?
+   If different sources → wrongful liquidation or stuck ADL state. (→ DEFI-82)
+
+4. **admin_config ↔ interest/reserve** —
+   Does every admin function that updates a rate model or fee rate call
+   `accrue_interest()` before applying the new value?
+   If not → retroactive rate application, mispriced interest for all users. (→ DEFI-80)
+
+For any interaction pair where the answer is NO → report as HIGH.
+This phase is mandatory. Do not skip it even if all per-file scans were clean.
+
+---
+
+### Phase 6 — Verify & Triage (Move-Expert Validation)
+
+Before reporting, every candidate finding from Phases 3-5 must survive a Move-expert
 verification pass. This phase eliminates false positives, corrects inflated severities,
 and ensures only real, exploitable findings reach the report.
 
@@ -278,13 +311,13 @@ need to change, not by downstream effect:
 
 Keep only the highest-impact framing of each root cause.
 
-**Output rules:** Only VALID and QUESTIONABLE findings proceed to Phase 6.
+**Output rules:** Only VALID and QUESTIONABLE findings proceed to Phase 7.
 DISMISSED findings go to "Verified Clean Checks" with dismissal reason.
 OVERCLASSIFIED findings proceed at adjusted severity.
 
 ---
 
-### Phase 6 — Report
+### Phase 7 — Report
 
 Produce a structured audit report in this exact format:
 

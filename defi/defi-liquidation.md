@@ -350,6 +350,77 @@ public fun liquidate(pos: &mut Position, repayment: Coin<USDC>, min_out: u64): C
 
 ---
 
+## DEFI-81 — Liquidation Cash Availability — Missing Pre-Check
+
+**Description:** When a liquidation function redeems collateral ctokens to underlying
+tokens in the same transaction, it must verify that the collateral reserve
+has sufficient idle cash BEFORE executing the redemption. If the collateral
+reserve is at high utilization (most assets borrowed out), the redemption
+call will abort because `available_cash < seize_amount`, reverting the entire
+liquidation transaction.
+
+This is especially dangerous because:
+1. The unhealthy position cannot be liquidated until utilization drops
+2. Interest continues to accrue on the underwater position
+3. The position grows toward bad debt with no remedy available
+4. A malicious borrower can intentionally keep collateral reserve at
+   high utilization to prevent their own liquidation
+
+Severity is HIGH because the safety mechanism (liquidation) fails precisely
+when it is needed most — at high utilization after aggressive borrowing.
+Bad debt accumulates with no protocol recourse.
+
+**Pattern:**
+```move
+// VULNERABLE — redeems underlying in same tx; reverts if reserve at high utilization
+public fun liquidate_ctokens(
+    reserve: &mut Reserve,
+    position: &mut Position,
+    repayment: Coin<USDC>,
+    ctx: &mut TxContext,
+) {
+    let seize_amount = calculate_seize(position, coin::value(&repayment));
+    // BUG: if available_cash < seize_amount, balance::split aborts
+    let seized = balance::split(&mut reserve.underlying, seize_amount);
+    transfer::public_transfer(coin::from_balance(seized, ctx), tx_context::sender(ctx));
+}
+
+// SAFE (option A) — pre-check cash availability
+public fun liquidate_ctokens(
+    reserve: &mut Reserve,
+    position: &mut Position,
+    repayment: Coin<USDC>,
+    ctx: &mut TxContext,
+) {
+    let seize_amount = calculate_seize(position, coin::value(&repayment));
+    assert!(balance::value(&reserve.underlying) >= seize_amount, E_INSUFFICIENT_CASH);
+    let seized = balance::split(&mut reserve.underlying, seize_amount);
+    transfer::public_transfer(coin::from_balance(seized, ctx), tx_context::sender(ctx));
+}
+
+// SAFE (option B) — liquidator receives ctokens directly, redeems separately
+public fun liquidate_ctokens(
+    position: &mut Position,
+    repayment: Coin<USDC>,
+    ctx: &mut TxContext,
+): Coin<CToken> {
+    let seize_amount = calculate_seize(position, coin::value(&repayment));
+    // Liquidator gets ctokens; redeems for underlying in a future tx
+    split_ctokens(position, seize_amount)
+}
+```
+
+**Check:**
+1. In the liquidation execution path, find where ctokens are converted to underlying
+   (`withdraw_underlying_asset`, `balance::split`, `redeem_ctokens`, etc.)
+2. Verify ONE of: (a) a pre-check exists: `assert!(available_cash >= seize_amount)`,
+   (b) ctoken seizure and underlying redemption are separated — liquidator receives ctokens
+   directly and redeems in a future transaction, or (c) the protocol has a bad debt write-off
+   path that handles this case
+3. If the liquidation redeems underlying in the same TX without (a), (b), or (c) → HIGH
+
+---
+
 ## Liquidation Economics Validation
 
 **Before reporting ANY liquidation finding, answer these questions:**
@@ -388,3 +459,4 @@ public fun liquidate(pos: &mut Position, repayment: Coin<USDC>, min_out: u64): C
 - [ ] Token denylist/freeze can't block liquidation (DEFI-63)
 - [ ] Interest frozen or grace period during/after pause (DEFI-64)
 - [ ] Liquidator can specify minimum collateral received (DEFI-66)
+- [ ] Liquidation path checks idle cash availability before redeeming underlying (DEFI-81)

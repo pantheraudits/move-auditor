@@ -380,6 +380,109 @@ public fun refinance(pool: &mut LendingPool, clock: &Clock, ctx: &mut TxContext)
 
 ---
 
+## DEFI-80 — Admin Parameter Update Without Pre-Sync
+
+**Description:** Any function that updates an interest rate model, fee rate, reward rate, or
+exchange rate parameter must call the protocol's state-flush function
+(`accrue_interest`, `update_index`, `sync_rewards`, etc.) BEFORE applying the new
+value. If the flush is missing, the new parameter is applied retroactively to
+the entire period since the last flush, incorrectly charging or crediting users.
+
+Severity is HIGH because interest/rewards for all users are mispriced for the entire
+elapsed period. The error scales with time-since-last-flush × rate-delta × total-borrowed/deposited.
+Example: admin updates a rate from 5% to 10% APR after 30 days of no interaction — all 30 days
+are retroactively charged at 10% instead of 5%.
+
+**Pattern:**
+```move
+// VULNERABLE — new rate model applied retroactively to entire elapsed period
+public fun update_interest_model(
+    _cap: &AdminCap,
+    reserve: &mut Reserve,
+    new_model: InterestRateModel,
+) {
+    // BUG: no accrue_interest() call — new rate applies retroactively
+    reserve.interest_rate_model = new_model;
+}
+
+// SAFE — flush accrued interest at old rate before applying new model
+public fun update_interest_model(
+    _cap: &AdminCap,
+    reserve: &mut Reserve,
+    clock: &Clock,
+    new_model: InterestRateModel,
+) {
+    accrue_interest(reserve, clock); // settle at OLD rate first
+    reserve.interest_rate_model = new_model;
+}
+```
+
+**Check:**
+1. For every admin/privileged setter that modifies interest rate model, borrow/supply rate
+   curves, liquidation bonus/fee percentages, or reward emission rates — verify the function
+   body contains a call to `accrue_interest()` or equivalent state-flush BEFORE the assignment
+2. Search for: `fun update_.*model`, `fun set_.*rate`, `fun update_.*interest`
+3. If absent → HIGH
+
+---
+
+## DEFI-82 — Emergency Mechanism Entry/Stop Source Mismatch
+
+**Description:** Emergency mechanisms (ADL, circuit breakers, pause triggers, liquidation
+incentive escalators) have two conditions: an ENTRY condition that activates
+the mechanism and a STOP condition that deactivates it. Both conditions must
+measure the same metric from the same source.
+
+If the entry condition reads metric A and the stop condition reads metric B,
+and A ≠ B (even when both are "total borrows"):
+- The mechanism can activate when it should not (A inflated by other groups)
+- The mechanism can fail to deactivate when it should (B understates reality)
+- Healthy positions can be force-liquidated (wrongful ADL)
+- Emergency state persists indefinitely (stop condition never true)
+
+Severity is HIGH if different scopes (reserve-level vs group-level),
+MEDIUM if same scope but different rounding direction.
+
+**Pattern:**
+```move
+// VULNERABLE — ADL entry reads reserve-level debt, stop reads emode-group debt
+public fun trigger_adl(reserve: &Reserve, emode_group: &EModeGroup) {
+    // Entry: aggregate debt across ALL emode groups
+    let total_debt = reserve.total_debt();  // reserve-level
+    assert!(total_debt > reserve.adl_threshold, E_NOT_TRIGGERED);
+    // ADL executes against positions in this emode_group...
+}
+public fun stop_adl(emode_group: &EModeGroup) {
+    // Stop: only this group's debt
+    let group_debt = emode_group.borrow_amount();  // group-level
+    assert!(group_debt <= emode_group.target, E_STILL_ABOVE);
+    // BUG: different scope — reserve inflated by other groups,
+    // but stop checks only this group. ADL fires on healthy groups.
+}
+
+// SAFE — both entry and stop read from the same source
+public fun trigger_adl(emode_group: &EModeGroup) {
+    let group_debt = emode_group.borrow_amount();
+    assert!(group_debt > emode_group.adl_threshold, E_NOT_TRIGGERED);
+}
+public fun stop_adl(emode_group: &EModeGroup) {
+    let group_debt = emode_group.borrow_amount();
+    assert!(group_debt <= emode_group.target, E_STILL_ABOVE);
+}
+```
+
+**Check:**
+1. For every emergency/escalation mechanism, identify the ENTRY check (what variable, from
+   which module/function) and the STOP check (what variable, from which module/function)
+2. If entry reads `reserve.total_debt()` and stop reads `emode_group.borrow_amount()`
+   → different scopes → HIGH
+3. If entry reads a `ceil()` value and stop reads `floor()` of the same value
+   → asymmetric threshold → MEDIUM
+4. Search for ADL / deleverage / circuit_breaker activation functions; trace the variable
+   passed to the entry assert and to the stop/exit check back to their source struct
+
+---
+
 ## Lending Verification Checklist
 
 - [ ] Liquidation threshold boundary: `<` vs `<=` matches the spec (DEFI-25)
@@ -392,3 +495,5 @@ public fun refinance(pool: &mut LendingPool, clock: &Clock, ctx: &mut TxContext)
 - [ ] Minimum position size prevents dust; partial repay cannot leave sub-minimum remainder (DEFI-32)
 - [ ] Debt objects cannot be transferred to unwilling recipients (DEFI-33)
 - [ ] Cooldown between borrow and refinance; accrued interest settled before index reset (DEFI-34)
+- [ ] Admin parameter setters call `accrue_interest()` before applying new values (DEFI-80)
+- [ ] Emergency mechanism entry and stop conditions read from the same source (DEFI-82)

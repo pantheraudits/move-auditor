@@ -653,6 +653,89 @@ Aries Markets (settle_share_amount wrong conversion — High)*
 
 ---
 
+## 11. Cross-Module Lifecycle
+
+### 11.1 Cross-Module Terminal State Cleanup
+
+**Pattern:** When any function — especially a permissionless one — can transition an
+obligation or position to a terminal state (zero debt, zero collateral,
+fully liquidated, fully repaid), ALL associated sub-objects across ALL
+modules must have a cleanup path.
+
+In Move, sub-objects are typically stored in separate modules:
+- Reward / liquidity mining trackers
+- Referral fee entries
+- Rate limiter records
+- eMode group membership entries
+- Insurance fund records
+
+If a sub-object has no cleanup path when its parent reaches terminal state,
+AND a permissionless function can trigger that terminal state, the result is a
+permanently orphaned object that can block admin operations forever.
+
+The highest-risk combination is:
+`permissionless_fn → terminal_state → orphaned_tracker → blocks_admin_fn`
+
+**Risk:** Admin-funded resources (reward pools, insurance reserves) can be
+permanently locked with no upgrade path in an immutable contract.
+
+```move
+// VULNERABLE — repay_on_behalf can clear last debt but reward tracker is orphaned
+// In repay.move:
+public fun repay_on_behalf(
+    obligation: &mut Obligation,
+    payment: Coin<USDC>,
+    _ctx: &mut TxContext,
+) {
+    let amount = coin::value(&payment);
+    obligation.debt = obligation.debt - amount;
+    // BUG: no cleanup of reward tracker in liquidity_mining module
+    // If debt == 0, obligation is terminal but tracker persists
+}
+
+// In liquidity_mining.move:
+public fun close_pool_reward(
+    _cap: &AdminCap,
+    pool: &mut RewardPool,
+) {
+    // Checks that no active trackers remain
+    assert!(pool.active_trackers == 0, E_TRACKERS_EXIST);
+    // Orphaned tracker blocks this forever → reward tokens locked
+    let rewards = balance::withdraw_all(&mut pool.rewards);
+    // ...
+}
+
+// SAFE — repayment cleans up all cross-module state on terminal transition
+public fun repay_on_behalf(
+    obligation: &mut Obligation,
+    mining_pool: &mut RewardPool,
+    payment: Coin<USDC>,
+    _ctx: &mut TxContext,
+) {
+    let amount = coin::value(&payment);
+    obligation.debt = obligation.debt - amount;
+    if (obligation.debt == 0) {
+        // Clean up reward tracker on terminal state
+        cleanup_reward_tracker(mining_pool, object::id(obligation));
+    };
+}
+```
+
+**Check:**
+1. For every permissionless function that can fully repay, fully redeem, or
+   fully liquidate a position — list all modules that hold per-obligation state
+2. For each: does the permissionless function (or a function it calls) clean
+   up that module's record when the position reaches terminal state?
+3. Find admin/maintenance functions (`close_pool`, `collect_fees`, `end_epoch`)
+   that check for "zero active trackers" or "empty registry" before executing
+4. If any such admin function can be permanently blocked by an orphaned
+   tracker that a permissionless function can create → HIGH
+5. Search for permissionless entry functions (no capability arg) that call
+   repay, liquidate, or withdraw; grep all other module files for
+   structs keyed by `ObligationID` or `PositionID`; verify cleanup calls exist
+
+---
+
 ## Verification Checklist
 
 Run through each item and mark ✅ (clean) or ❌ (finding):
@@ -686,6 +769,7 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] Stake/unstake cannot manipulate reward accumulators in same transaction (10.2)
 - [ ] All time comparisons use correct operator direction (10.3)
 - [ ] Liquidation functions pass correct variables — debt vs collateral (10.4)
+- [ ] Permissionless terminal-state transitions clean up all cross-module sub-objects (11.1)
 
 > **Deep-dive prompts and the Move Vulnerability Patterns prompt pack have been moved to
 > `audit-prompts.md` in this directory.** Load that file for targeted per-module,
