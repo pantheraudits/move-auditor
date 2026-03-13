@@ -483,6 +483,44 @@ public fun stop_adl(emode_group: &EModeGroup) {
 
 ---
 
+## DEFI-84 — Admin Config Update Overwrites Embedded Runtime State
+
+**Description:** Admin parameter update functions that replace an entire config struct also destroy embedded runtime state (rate limiters, accumulators, counters, timestamps) if the runtime state lives inside the same struct or is unconditionally rebuilt during the update.
+
+**Pattern to flag:**
+```move
+// VULNERABLE: update() replaces BOTH config AND runtime state
+public fun update(emode: &mut EMode, new_params: NewEMode) {
+    emode.collateral_config = new_params.collateral;  // config — OK to replace
+    emode.limiter = new_limiter(new_params.limiter);   // runtime state — DESTROYED
+}
+```
+
+**Check:**
+1. For every admin config update function, identify ALL fields that get written
+2. Classify each field as "config" (intended to change) vs "runtime state" (accumulated values, counters, limiters, timestamps)
+3. If any runtime state is overwritten/reset as a side effect of a config update, flag it
+4. Check if frontrunning the admin tx allows bypassing the limit: borrow up to limit → admin resets limiter → borrow again
+
+**Impact:**
+- Rate limiters reset to zero: borrowers can immediately borrow 2x the limit by sandwiching the admin tx
+- Accumulators reset: interest/rewards for the current period are lost
+- Counters reset: tracking of active positions becomes inaccurate
+
+**Fix:** Separate config parameters from runtime state. Only update the config fields, preserve runtime state:
+```move
+public fun update(emode: &mut EMode, new_params: NewEMode) {
+    emode.collateral_config = new_params.collateral;
+    // DO NOT touch emode.limiter — it contains runtime state
+    // Only update limiter CONFIG (window size, max amount) without resetting segments:
+    emode.limiter.update_config(new_params.limiter_config);
+}
+```
+
+**References:** DEFI-80 (missing pre-sync), SUI-28 (PTB repeated call bypass after reset).
+
+---
+
 ## Lending Verification Checklist
 
 - [ ] Liquidation threshold boundary: `<` vs `<=` matches the spec (DEFI-25)
@@ -497,3 +535,4 @@ public fun stop_adl(emode_group: &EModeGroup) {
 - [ ] Cooldown between borrow and refinance; accrued interest settled before index reset (DEFI-34)
 - [ ] Admin parameter setters call `accrue_interest()` before applying new values (DEFI-80)
 - [ ] Emergency mechanism entry and stop conditions read from the same source (DEFI-82)
+- [ ] Admin config updates do NOT overwrite embedded runtime state (limiters, accumulators, counters) (DEFI-84)

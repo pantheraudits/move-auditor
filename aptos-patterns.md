@@ -743,6 +743,48 @@ public fun init_module_b(deployer: &signer) {
 
 ---
 
+## APT-24 — Unchecked Signer Parameter (No Address Validation)
+
+**Description:** A `public entry fun` that accepts `&signer` but never validates the signer's address against any stored admin/owner/role address. The `&signer` type only proves someone signed the transaction — it does NOT prove they are authorized. Without a `signer::address_of` comparison, ANY account that signs a transaction can execute the function.
+
+**Pattern:**
+```move
+// VULNERABLE — &signer accepted but never validated against stored authority
+public entry fun set_config(admin: &signer, new_fee: u64) acquires Config {
+    let config = borrow_global_mut<Config>(@protocol);
+    config.fee = new_fee;
+    config.admin = signer::address_of(admin); // sets caller as admin — no check!
+}
+
+// VULNERABLE — &signer used only for move_to, anyone can create admin state
+public entry fun initialize(account: &signer) {
+    move_to(account, AdminConfig {
+        admin: signer::address_of(account),
+        treasury: signer::address_of(account),
+    });
+    // No guard: exists<AdminConfig>(@protocol) or one-time init check
+}
+
+// SAFE — validates signer address against stored admin
+public entry fun set_config(admin: &signer, new_fee: u64) acquires Config {
+    let config = borrow_global_mut<Config>(@protocol);
+    assert!(signer::address_of(admin) == config.admin, E_NOT_ADMIN);
+    config.fee = new_fee;
+}
+```
+
+**Check:**
+1. For every `public entry fun` and `entry fun` that takes `&signer`: search for `signer::address_of` in the function body and all callees
+2. If `signer::address_of` is NEVER called, or is called but never compared to a stored/hardcoded authority address → flag as Critical
+3. Common false patterns: `signer::address_of` used only as a destination (e.g., `move_to(account, ...)`) but never as an authorization check
+4. `init_module(account: &signer)` is a special case — runs once at publish time. But verify it IS `init_module` and not a re-callable setup function
+
+**Risk:** Complete access control bypass. Any wallet can call admin functions, drain funds, change protocol parameters, or take over governance.
+
+*Cross-ref: common-move.md 1.1 (missing capability validation), APT-12 (test functions without restrictions)*
+
+---
+
 ## Aptos Verification Checklist
 
 - [ ] All `table::borrow` / `table::remove` preceded by `table::contains`
@@ -767,3 +809,4 @@ public fun init_module_b(deployer: &signer) {
 - [ ] Function value callbacks cannot re-enter with altered parameters — bind values into structs (APT-21)
 - [ ] Struct field order and types preserved across upgrades — append-only or migration function exists (APT-22)
 - [ ] Each resource account used by exactly one module — no cross-module signer scope creep (APT-23)
+- [ ] Every `public entry fun` / `entry fun` with `&signer` validates address against stored authority — not just used as destination (APT-24)

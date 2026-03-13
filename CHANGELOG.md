@@ -11,6 +11,36 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.0.0] — 2026-03-14
+
+### Added
+- **SUI-28:** PTB Repeated Call Limit Bypass — close factor, rate limits, cooldowns bypassed via multi-call PTBs
+- **DEFI-83:** Close Factor Cumulative Enforcement — per-transaction vs per-call limit tracking
+- **DEFI-84:** Admin Config Update Resets Embedded Runtime State — limiters, accumulators destroyed by config writes
+- **DESIGN-L1 caveat:** Missing EMA-spot divergence tolerance in liquidation path
+- **DEFI-54 enhancement:** Sui PTB amplification note for partial liquidation bypass
+- **Phase 2 Perspective 4:** Symmetry Checker (deposit/withdraw, borrow/repay, mint/burn, trigger/seize)
+- **Phase 5 pairs 5-8:** New mandatory cross-module interaction checks
+- **Known False Positive Patterns:** 5 patterns that appear vulnerable but are commonly intentional
+- **Quick Maturity Assessment:** Adapted from Trail of Bits Code Maturity Framework
+- **APT-24:** Unchecked Signer Parameter — `&signer` accepted without `signer::address_of` authorization check
+- **Phase 1 Entry Point Classification:** Sui vs Aptos visibility table showing that ALL `public fun` are PTB-callable on Sui
+- **Phase 1 Access Control Classification:** Heuristic for classifying entry points by access tier (Public/Owner/Role/Review Required)
+- Trail of Bits methodology integration: asymmetry detection, secure-by-default checks, entry-point-analyzer heuristics
+
+### Changed
+- Phase 1 now includes Entry Point Classification table, Access Control Classification heuristic, and Quick Maturity Assessment
+- Phase 2 Perspective 1 (Attacker) now includes unchecked `&signer` scan (Aptos) and PTB-composability check (Sui)
+- Phase 2 now has 4 perspectives (added Symmetry Checker)
+- DEFI-54 now includes Sui PTB amplification guidance
+- DESIGN-L1 now includes caveat about missing tolerance checks
+
+### Benchmark
+- v2.3.0 found 2/6 known CurrentSUI bugs
+- v3.0.0 target: 4/6 known bugs + 2 novel bugs (close factor bypass, limiter reset) that v2.3.0 missed
+
+---
+
 ## [2.3.0] — 2026-03-10
 
 ### False Positive Reduction — Benchmarking-driven verification improvements

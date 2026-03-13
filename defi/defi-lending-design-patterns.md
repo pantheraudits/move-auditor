@@ -26,6 +26,9 @@ every lending-related candidate finding against these patterns before labeling i
 oracle mode, or if the spot/EMA divergence creates an arbitrage where attackers can self-liquidate
 at a profit during high volatility (cross-ref: DEFI-59).
 
+**Caveat — Missing EMA-Spot Divergence Guard in Liquidation Path:**
+While using spot for seize and EMA for eligibility is a valid design choice, the liquidation path should still enforce a MAXIMUM EMA-spot divergence tolerance. If borrow/withdraw operations enforce this tolerance (reverting when EMA and spot diverge by >X%), but liquidation does NOT, then during extreme volatility the liquidation path becomes the only functioning code path — and it operates with potentially arbitrarily stale or divergent prices. Consider: add a wider (but not unlimited) tolerance check for liquidation, e.g., 2x the borrow/withdraw tolerance.
+
 ---
 
 ## DESIGN-L2 — Flash Loan Not Updating Accounting Fields (cash/debt)

@@ -124,6 +124,9 @@ public fun liquidate(position: &mut Position, repayment: Coin<USDC>) {
 
 **Check:** Partial liquidation must improve health. Close_factor prevents cherry-picking.
 
+**Sui PTB Amplification (see SUI-28):**
+On Sui, partial liquidation bypass is amplified because PTBs allow calling `liquidate()` N times atomically. Unlike EVM where each block typically processes liquidations independently, a Sui PTB can chain: liquidate_50% → liquidate_25% → liquidate_12.5% → ... in one atomic tx. The close factor becomes exponentially decaying rather than a hard cap. Verify: does the protocol track cumulative liquidation per-transaction or per-call?
+
 ---
 
 ## DEFI-55 — Incorrect Liquidation Reward Decimals
@@ -421,6 +424,41 @@ public fun liquidate_ctokens(
 
 ---
 
+## DEFI-83 — Close Factor Cumulative Enforcement Across Atomic Transactions
+
+**Description:** Close factor limits the percentage of debt that can be liquidated in a single event. On chains with atomic multi-call transactions (Sui PTBs, EVM internal transactions), the close factor must be enforced against the debt balance at the START of the transaction, not recalculated after each partial liquidation.
+
+**Pattern to flag:**
+```move
+// VULNERABLE: close factor recalculated on remaining (reduced) debt
+public fun liquidate(market: &mut Market, obligation_id: ID, repay_amount: u64) {
+    let debt = market.obligation(obligation_id).debt();
+    let max_repay = debt * close_factor;  // current_debt shrinks after each call
+    assert!(repay_amount <= max_repay, E_CLOSE_FACTOR_EXCEEDED);
+    execute_liquidation(market, obligation_id, repay_amount);
+}
+```
+
+**Check:**
+1. Is the close factor checked against `original_debt_at_start_of_transaction` or `current_debt_after_previous_liquidation_in_same_tx`?
+2. After one partial liquidation, does the position remain underwater? (Yes, because liquidation incentive removes more collateral VALUE than debt VALUE)
+3. Can a liquidator construct an atomic transaction with N liquidation calls?
+4. Calculate: with close_factor CF and N calls, total liquidated = 1 - (1-CF)^N. At CF=50%, N=3 → 87.5%. At CF=50%, N=5 → 96.9%.
+
+**Impact:** Borrower loses significantly more collateral than the close factor intends. In extreme cases, repeated liquidation pushes positions into bad debt (zero collateral, residual debt) that is socialized across all depositors.
+
+**Fix:** Track the obligation's debt at the start of the first liquidation in the transaction. All subsequent close factor checks reference this original snapshot:
+```move
+if (!obligation.has_liquidation_snapshot()) {
+    obligation.set_liquidation_snapshot(current_debt);
+}
+let max_repay = obligation.liquidation_snapshot() * close_factor - obligation.already_liquidated_this_tx();
+```
+
+**References:** SUI-28, Compound V2 close factor design (enforced per-block but blocks are single-tx on most chains).
+
+---
+
 ## Liquidation Economics Validation
 
 **Before reporting ANY liquidation finding, answer these questions:**
@@ -460,3 +498,4 @@ public fun liquidate_ctokens(
 - [ ] Interest frozen or grace period during/after pause (DEFI-64)
 - [ ] Liquidator can specify minimum collateral received (DEFI-66)
 - [ ] Liquidation path checks idle cash availability before redeeming underlying (DEFI-81)
+- [ ] Close factor enforced per-TRANSACTION (cumulative), not per-call — PTB repeated call bypass (DEFI-83)

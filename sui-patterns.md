@@ -894,6 +894,35 @@ fun init(ctx: &mut TxContext) {
 
 ---
 
+## SUI-28 — PTB Repeated Call Limit Bypass
+
+**Description:** Sui PTBs (Programmable Transaction Blocks) allow calling the same function multiple times against the same shared object in a single atomic transaction. Per-call limits (close factors, rate limits, cooldowns) can be bypassed by calling the function N times, where each call re-reads the updated state and gets a fresh allowance.
+
+**Pattern:**
+```move
+// VULNERABLE — close factor checked per-call, not per-transaction
+public fun liquidate(market: &mut Market, obligation_id: ID, repay_amount: u64) {
+    let debt = market.obligation(obligation_id).debt();
+    let max_repay = debt * close_factor; // recalculated on CURRENT debt
+    assert!(repay_amount <= max_repay, E_CLOSE_FACTOR_EXCEEDED);
+    // ... execute liquidation, reduce debt ...
+}
+// Attacker calls liquidate() 5x in one PTB: each call gets 50% of REMAINING debt
+// Total: 50% + 25% + 12.5% + 6.25% + 3.125% = 96.875% liquidated
+```
+
+**Risk:** Any per-call numeric limit becomes meaningless if the function can be called repeatedly in the same PTB with state persisting between calls. This is unique to Sui's PTB model — on EVM, each tx is independent.
+
+**Check:**
+1. For every function with a per-call numeric limit (close factor, max withdrawal, rate limit), verify the limit is tracked per-TRANSACTION, not per-call
+2. Look for patterns where: (a) a limit is checked against current state, (b) state is modified to reduce the denominator, (c) no flag prevents re-invocation in the same PTB
+3. Common vulnerable patterns: liquidation close factors, withdrawal rate limits, flash loan stacking across different assets, reward claim limits
+4. Fix patterns: (a) store original state in a hot-potato that persists across calls, (b) set a per-obligation/per-asset flag that prevents repeated operations, (c) track cumulative amounts via a transaction-scoped accumulator
+
+**Real-World Example:** CurrentSUI lending protocol — close factor of 50% bypassed via 3 liquidation calls in one PTB, achieving 87.5% total liquidation. Position pushed from recoverable to bad debt.
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -923,3 +952,4 @@ fun init(ctx: &mut TxContext) {
 - [ ] All dynamic fields removed before `object::delete(uid)` — no orphaned balances (SUI-25)
 - [ ] `KioskOwnerCap` stored securely; `TransferPolicy` rules enforced on every extraction (SUI-26)
 - [ ] `UpgradeCap` held by governance with minimum-required policy; premature immutability flagged (SUI-27)
+- [ ] Per-call numeric limits (close factor, rate limits, cooldowns) enforced per-TRANSACTION not per-call — PTB repeated call bypass (SUI-28)

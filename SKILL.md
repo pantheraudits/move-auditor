@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "2.3.0"
+  version: "3.0.0"
   author: pantheraudits
   category: security
   tags:
@@ -42,15 +42,15 @@ file in this skill's directory (e.g., if SKILL.md is at
 | File | When to load |
 |------|-------------|
 | `common-move.md` | **Always** — chain-agnostic checks (sections 1–10), verification checklist |
-| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-27 |
-| `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-23 |
+| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-28 |
+| `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-24 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`) — DEFI-11 to DEFI-16 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
-| `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82 |
+| `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
 | `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, fee/share math) — DEFI-35 to DEFI-42 |
 | `defi/defi-slippage.md` | When swap/DEX patterns detected (`swap`, `min_amount_out`, `slippage`, AMM pool) — DEFI-43 to DEFI-49 |
-| `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81 |
+| `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81, DEFI-83 |
 | `defi/defi-auction-clm.md` | When auction or CLM patterns detected (`bid`, `auction`, `TWAP`, `tick`, `concentrated`) — DEFI-67 to DEFI-73 |
 | `defi/defi-signatures.md` | When signature verification detected (`ed25519`, `secp256k1`, `verify_signature`, `nonce`) — DEFI-74 to DEFI-79 |
 | `defi/defi-lending-design-patterns.md` | When lending/borrowing detected — known-good patterns (DESIGN-L1 to L4) that should NOT be reported as bugs |
@@ -89,13 +89,39 @@ You are a senior Move security researcher. Your job is to find real, exploitable
 **Map the codebase:**
 ```
 - List all modules
-- List all public/entry functions (these are the attack surface)
+- List all public/entry functions (these are the attack surface — see table below)
 - List all structs with key/store abilities (persistent state)
 - List all capability types (objects that grant permissions)
 - Identify any admin/owner patterns
 - Identify any cross-module calls
 - Estimate complexity: LoC, number of entry points, external dependencies
 ```
+
+**Entry Point Classification (from Trail of Bits methodology):**
+Attack surface differs by chain — the same visibility keyword means different things:
+
+| Visibility | Sui (PTB-callable?) | Aptos (tx entry?) |
+|------------|---------------------|-------------------|
+| `public entry fun` | Yes — PTB + direct tx | Yes — transaction entry |
+| `public fun` | **Yes — PTB-callable!** | **No** — module-callable only |
+| `entry fun` | Yes — direct tx only | Yes — transaction only |
+| `public(package) fun` | No — package-internal | No — package-internal |
+| `fun` (private) | No | No |
+
+**Critical Sui distinction:** ALL `public fun` on Sui are callable from PTBs, not just `entry` ones. This makes Sui's attack surface significantly larger than Aptos for the same code.
+
+**Access Control Classification — for each entry point, classify:**
+- **Sui:** Owned object with "Cap" in name → specific role; Owned object without "Cap" → Owner-gated; Shared object parameter with no cap → **Public/Unrestricted**
+- **Aptos:** `signer::address_of` compared to stored address → Role-based; `exists<*Cap>(addr)` → Capability-based; `&signer` with NO address check → **Review Required** (see APT-24)
+- Any function classified as Public/Unrestricted that mutates state → highest audit priority
+
+**Quick Maturity Assessment (adapted from Trail of Bits Code Maturity Framework):**
+- [ ] Arithmetic: Does the protocol use safe math? Are there overflow-prone u64 operations?
+- [ ] Testing: What % of entry points have test coverage? Are there integration tests?
+- [ ] Access Control: Is there a clear privilege hierarchy? Are admin keys governed?
+- [ ] Complexity: How many cross-module calls? How deep is the call stack for critical paths?
+- [ ] Documentation: Are invariants documented? Are design decisions commented?
+Flag any area scoring poorly — it deserves extra audit attention.
 
 **Output a one-paragraph codebase summary** before proceeding to Phase 2.
 
@@ -111,6 +137,8 @@ Enumerate every entry function. For each:
 - Can I pass an object I don't own?
 - Can I bypass any `assert!` by constructing a specific state?
 - Can I call this in a sequence that wasn't intended?
+- (Aptos) Does any `public entry fun` accept `&signer` without ever calling `signer::address_of` for authorization? → APT-24
+- (Sui) Is this a `public fun` (not just `entry`)? If so, it's PTB-composable — can it be chained with other calls to bypass per-call limits or create unexpected state?
 
 **Perspective 2 — The Protocol Designer**
 - What invariants does this protocol rely on?
@@ -121,6 +149,16 @@ Enumerate every entry function. For each:
 - If another protocol calls into this one, what can go wrong?
 - Are there flash loan vectors?
 - Can object references be reused or replayed across transactions?
+
+**Perspective 4 — The Symmetry Checker (from Trail of Bits methodology)**
+For every pair of inverse operations, verify symmetry:
+- deposit/withdraw: `withdraw(deposit(X)) <= X` always (rounding favors protocol)
+- borrow/repay: `repay(borrow(X)) >= X` always (rounding favors protocol)
+- mint/burn: `burn(mint(X)) <= X` always
+- liquidation trigger/seize: same price oracle type, or bounded divergence
+- rate limit add/reduce: reduce applied to same time segment as add
+- admin update: only config changes, runtime state preserved
+For each pair, check: (a) rounding direction, (b) state consistency, (c) oracle consistency, (d) access control symmetry
 
 ---
 
@@ -185,6 +223,27 @@ Required pairs to check in every lending protocol audit:
    Does every admin function that updates a rate model or fee rate call
    `accrue_interest()` before applying the new value?
    If not → retroactive rate application, mispriced interest for all users. (→ DEFI-80)
+
+5. **liquidate ↔ close_factor** —
+   Is the close factor enforced per-TRANSACTION, not per-call?
+   On Sui, PTBs allow calling liquidate() N times atomically. If close factor is
+   checked against current (shrinking) debt, total liquidation = 1-(1-CF)^N. (→ SUI-28, DEFI-83)
+
+6. **admin_config ↔ rate_limiters** —
+   Does the config update function preserve accumulated runtime state (limiter segments,
+   accumulators, counters)?
+   If config update resets limiters → sandwich attack: borrow to limit → admin resets → borrow again. (→ DEFI-84)
+
+7. **oracle_eligibility ↔ oracle_seize** —
+   Does liquidation use the same price type for both trigger and seize, OR enforce a
+   bounded divergence between them?
+   If borrow/withdraw enforce EMA-spot tolerance but liquidation does NOT → unbounded
+   price divergence in the only operational code path during volatility. (→ DESIGN-L1 caveat)
+
+8. **flash_loan ↔ deposit/borrow/withdraw** —
+   Do operations during an active flash loan see stale accounting fields (cash, total_borrows)?
+   If hot potato guarantees repayment, not updating cash is intentional (DESIGN-L2). But if
+   other operations READ the stale value mid-PTB, they may misprice shares or health. (→ DESIGN-L2 caveat)
 
 For any interaction pair where the answer is NO → report as HIGH.
 This phase is mandatory. Do not skip it even if all per-file scans were clean.
@@ -384,6 +443,20 @@ test coverage gaps, centralization risks, upgrade risks.
 | Info     | Code quality, gas inefficiency, documentation gaps, non-exploitable patterns |
 
 **Likelihood × Impact = Severity.** A theoretically catastrophic bug that requires a nation-state adversary is not Critical. A low-impact bug that's trivially exploitable is Medium, not Low.
+
+---
+
+## Known False Positive Patterns — Do NOT Report Unless Evidence of Actual Harm
+
+Before filing a finding, check if it matches these patterns that APPEAR vulnerable but are commonly intentional:
+
+1. **Flash loan not updating accounting fields (cash, debt):** Hot potato guarantees same-tx repayment. Decrementing cash would understate reserves during the loan window. See DESIGN-L2.
+2. **EMA for liquidation eligibility, Spot for seize calculation:** Liquidator sells collateral at spot market price. Using EMA for seize would make liquidation unprofitable during rapid price drops. See DESIGN-L1.
+3. **Blocking borrows when idle cash < cash_reserve:** Protective behavior — ensures protocol fees are not lent out. Resolves naturally as loans are repaid.
+4. **Liquidation skipping rate limiters:** Liquidations must proceed regardless of rate limits to maintain protocol solvency. Check if this is documented in code comments.
+5. **Interest rate returning 0 at very low utilization:** Expected behavior from fixed-point truncation. Only flag if it enables economically significant free borrowing.
+
+If you encounter one of these, you MUST explain why it is harmful DESPITE the design rationale before including it in the report. Otherwise, downgrade to Informational or omit.
 
 ---
 
