@@ -872,6 +872,156 @@ For every suspected DoS/deadlock, answer ALL of these before assigning severity:
 
 ---
 
+## 13. Build & Test Log Analysis
+
+> **Prerequisite:** This section runs ONLY when `BUILD_AVAILABLE = true` (the project
+> compiles successfully). If the project does not build, skip this entire section.
+> The auditor sets this flag during Phase 1 of the SKILL.md workflow.
+
+### Why test logs matter for security audits
+
+Test suites exercise code paths that static analysis reads but never runs. Test logs can
+reveal arithmetic aborts, assertion failures, unexpected error codes, and edge-case panics
+that the developer may have papered over with `#[expected_failure]` annotations — or that
+indicate latent bugs the developer hasn't noticed. A test that passes with
+`#[expected_failure(abort_code = ...)]` is the developer **acknowledging** an abort exists.
+The auditor's job is to determine whether that abort can happen in production under
+realistic conditions.
+
+### 13.1 Build Verification
+
+**Procedure:**
+1. Check for `Move.toml` in the project root (or `sources/` structure)
+2. Run the appropriate build command:
+   - **Sui:** `sui move build 2>&1` — capture stdout + stderr
+   - **Aptos:** `aptos move compile 2>&1` — capture stdout + stderr
+3. If build succeeds (exit code 0) → proceed to 13.2
+4. If build fails → record build errors in the audit summary under "Auditor Notes".
+   Build failures themselves can be informative:
+   - Missing dependencies → potential supply chain risk (cross-ref 7.5)
+   - Type errors → possible upgrade incompatibility (cross-ref APT-22)
+   - Unused imports/variables → may indicate incomplete refactoring
+   Do NOT run test log analysis on a project that does not compile.
+
+### 13.2 Test Execution & Log Capture
+
+**Procedure:**
+1. Run the full test suite and capture all output:
+   - **Sui:** `sui move test 2>&1` — capture full output
+   - **Aptos:** `aptos move test 2>&1` — capture full output
+2. If the project has custom test commands (check `Makefile`, `justfile`, `package.json`
+   scripts, or README), run those as well
+3. Save the raw test output for analysis
+
+**Important:** If the test suite is very large (>5 minutes), run with `--filter` on
+security-critical modules first (modules containing financial math, access control,
+or state-mutating entry points).
+
+### 13.3 Log Analysis — What to Look For
+
+Analyze the test output systematically. For each category below, search the logs
+and flag anything suspicious:
+
+**Category 1 — Arithmetic Aborts (High-signal for overflow/underflow bugs)**
+- Search for: `arithmetic error`, `ARITHMETIC_ERROR`, `overflow`, `underflow`,
+  `abort code 4001` (Move stdlib arithmetic), `MoveAbort`, `execution failed`
+- For each abort found:
+  - Is it inside an `#[expected_failure]` test? If yes → the developer knows about it.
+    Ask: **can this abort happen in production, not just tests?**
+  - Is it in a test that exercises a user-facing code path (deposit, withdraw, borrow,
+    repay, liquidate, claim)? If yes → potential DoS vector
+  - What function and module does it trace back to?
+  - Cross-ref: Section 2 (Arithmetic & Overflow), Section 12 (Arithmetic/Accounting DoS)
+
+**Category 2 — Assertion Failures (Medium-signal for invariant violations)**
+- Search for: `assertion failure`, `ABORTED`, `abort code`, `E_` error constant names
+- For each assertion failure:
+  - What invariant is being checked?
+  - Is the test intentionally triggering the assertion (negative test) or is it unexpected?
+  - If a positive test (should-succeed test) hits an assertion → likely a real bug
+  - Cross-ref: Section 4 (Logic & Invariant Violations)
+
+**Category 3 — Expected Failure Annotations (Medium-signal for papered-over bugs)**
+- Search for: `#[expected_failure]`, `expected_failure(abort_code`
+- For each expected-failure test:
+  - What abort code is expected? Map it back to the error constant and the assert that fires
+  - Is the abort a legitimate input validation (e.g., "zero amount rejected") or does it
+    indicate a code path that aborts when it shouldn't (e.g., "overflow in reward calc")?
+  - **Key question:** If this abort fires in production, does it block user operations?
+  - Tests that expect arithmetic overflow aborts in financial functions are HIGH PRIORITY —
+    the developer is acknowledging the overflow exists
+
+**Category 4 — Test Failures / Skipped Tests (Low-signal but informative)**
+- Search for: `FAILED`, `test result: FAILED`, `ignored`, `filtered out`
+- Failing tests may indicate:
+  - Incomplete implementation (code under development)
+  - Regression from recent changes
+  - Edge cases the developer hasn't fixed yet
+- Skipped/ignored tests deserve review — they may have been disabled because they
+  exposed problematic behavior
+
+**Category 5 — Gas / Execution Limits (Low-signal for DoS)**
+- Search for: `OUT_OF_GAS`, `EXECUTION_LIMIT_REACHED`, `timeout`
+- Functions hitting gas limits in tests may indicate unbounded loops or excessive
+  computation — potential DoS in production
+
+### 13.4 Triage & Escalation
+
+For each flagged log entry, apply this triage:
+
+| Log Signal | Initial Priority | Escalation Criteria |
+|------------|-----------------|---------------------|
+| Arithmetic abort in user-facing path | High | If abort occurs before state checkpoint (→ 12.1), escalate to Critical investigation |
+| Expected-failure test for overflow in financial math | High | Cross-check with DEFI-85/DEFI-86 — if overflow is reachable with production values, report |
+| Assertion failure in positive test | Medium | Investigate the invariant — is it reachable from external inputs? |
+| Expected-failure for input validation | Low | Usually legitimate — verify the validation is correct |
+| Failing/skipped test | Info | Note in Auditor Notes unless it reveals a security pattern |
+| Gas limit hit | Medium | Check if the function is user-callable with attacker-controlled iteration count |
+
+**Escalation rule:** Any arithmetic abort or overflow-related `#[expected_failure]` in
+a module that handles financial state (balances, rewards, interest, shares) MUST be
+cross-referenced against the vulnerability patterns in this file. The auditor must:
+1. Trace the abort back to the exact function and line
+2. Determine if the abort is reachable from a user-facing entry point
+3. If reachable → apply the Recoverability Matrix (Section 12.1)
+4. Report findings to human for manual verification with:
+   - The exact test name and abort code
+   - The production code path that can trigger it
+   - Whether the abort occurs before a state checkpoint
+   - A severity assessment based on the Recoverability Matrix
+
+### 13.5 Reporting Test Log Findings
+
+Test log findings are reported in a separate subsection of the audit report:
+
+```
+## Test Log Analysis
+
+**Build Status:** ✅ Compiled successfully | ❌ Build failed (see Auditor Notes)
+**Test Results:** X passed, Y failed, Z skipped
+**Flags Raised:** N items requiring investigation
+
+### [TEST-NNN] Flag Title
+
+| Field | Value |
+|-------|-------|
+| Priority | High / Medium / Low / Info |
+| Test Name | `test_module::test_function_name` |
+| Log Signal | Arithmetic abort / Expected failure / Assertion / etc. |
+| Production Path | function_name in module_name.move:line |
+| Checkpoint Safe? | Yes (abort after checkpoint) / No (abort before checkpoint) |
+
+**Analysis:** What the test log revealed and why it may indicate a security issue.
+
+**Recommendation:** Further manual investigation needed / Confirmed as vulnerability (cross-ref FINDING-NNN) / Benign
+```
+
+**Integration with main findings:** If a test log flag confirms or strengthens a finding
+from Phases 3–5, cross-reference it in the main finding's Verification section rather than
+duplicating it. Test log evidence increases finding confidence from QUESTIONABLE to VALID.
+
+---
+
 ## Verification Checklist
 
 Run through each item and mark ✅ (clean) or ❌ (finding):
@@ -910,6 +1060,7 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] Every periodic accounting update writes checkpoint BEFORE or ATOMICALLY WITH potentially-aborting arithmetic (12.1)
 - [ ] Admin-configured parameters validated against overflow bounds using production-realistic values and token decimals (12.2)
 - [ ] Recoverability Matrix completed for every DoS candidate — cancel/claim/close paths checked for shared failure (12.1, 12.2)
+- [ ] Build & test log analysis completed (if project is buildable) — arithmetic aborts, assertion failures, and error patterns reviewed (13)
 
 > **Deep-dive prompts and the Move Vulnerability Patterns prompt pack have been moved to
 > `audit-prompts.md` in this directory.** Load that file for targeted per-module,

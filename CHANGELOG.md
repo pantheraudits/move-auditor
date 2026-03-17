@@ -11,6 +11,37 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.2.0] — 2026-03-17
+
+### Build & Test Log Analysis — Runtime-informed vulnerability detection
+
+Adds a conditional build-and-test phase to the audit workflow. When the target project
+compiles, the auditor runs the test suite, captures output, and systematically analyzes
+logs for arithmetic aborts, assertion failures, expected-failure annotations, and edge-case
+panics that may indicate latent High/Critical bugs invisible to static-only pattern matching.
+
+**SKILL.md:**
+- **Phase 1:** Added Build Detection gate — checks `Move.toml` + runs `sui move build` or
+  `aptos move compile`. Sets `BUILD_AVAILABLE` flag. If build fails, logs errors and skips
+  test analysis. If build succeeds, runs Test Log Analysis (common-move.md Section 13)
+
+**common-move.md:**
+- **Section 13 — Build & Test Log Analysis** (full procedure):
+  - 13.1: Build Verification — compile check with error categorization
+  - 13.2: Test Execution & Log Capture — run test suite with output capture
+  - 13.3: Log Analysis — 5 signal categories: arithmetic aborts, assertion failures,
+    expected-failure annotations, test failures/skipped tests, gas/execution limits
+  - 13.4: Triage & Escalation — priority table with escalation rules; arithmetic aborts
+    in financial modules auto-escalate to Recoverability Matrix analysis
+  - 13.5: Reporting — structured TEST-NNN format with cross-referencing to main findings
+- **1 new verification checklist item** for Section 13
+
+**README.md:**
+- Added "Best results" section explaining the skill works best on buildable projects
+- Documented static-only fallback mode for non-buildable code
+
+---
+
 ## [3.1.0] — 2026-03-17
 
 ### Arithmetic/Accounting DoS — Catch hidden fixed-point overflow and accumulator deadlock

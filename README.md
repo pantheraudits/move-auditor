@@ -47,6 +47,18 @@ cp -r . ~/.claude/commands/move-auditor
    /move-auditor [file]  # Audit a specific file
    ```
 
+### Best results
+
+For the deepest analysis, run the skill against a **buildable project** — one where
+`sui move build` (Sui) or `aptos move compile` (Aptos) succeeds. When the project compiles,
+the auditor will also run the test suite, capture logs, and analyze them for arithmetic
+aborts, assertion failures, and suspicious `#[expected_failure]` annotations that may
+indicate latent High/Critical bugs invisible to static-only review.
+
+> **Static-only mode:** If the project doesn't build (missing dependencies, partial code,
+> review-only context), the skill still runs the full pattern-based audit — it just skips
+> the test log analysis phase.
+
 The skill also **auto-activates** when `.move` files are present or when you ask about Move security. It will:
 
 1. Detect chain (Sui or Aptos) and load relevant patterns

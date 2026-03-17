@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.1.0"
+  version: "3.2.0"
   author: pantheraudits
   category: security
   tags:
@@ -123,7 +123,14 @@ Attack surface differs by chain — the same visibility keyword means different 
 - [ ] Documentation: Are invariants documented? Are design decisions commented?
 Flag any area scoring poorly — it deserves extra audit attention.
 
-**Output a one-paragraph codebase summary** before proceeding to Phase 2.
+**Build Detection & Test Log Analysis (conditional):**
+Before proceeding, check if the project is buildable (`Move.toml` exists + source compiles).
+- **Sui:** Run `sui move build` — if exit code 0 → `BUILD_AVAILABLE = true`
+- **Aptos:** Run `aptos move compile` — if exit code 0 → `BUILD_AVAILABLE = true`
+- If build fails → set `BUILD_AVAILABLE = false`, note build errors in the summary, skip test log analysis
+- If `BUILD_AVAILABLE = true` → run **Test Log Analysis** (see common-move.md Section 13 for full procedure). Run the project's test suite, capture output, and analyze logs for arithmetic aborts, assertion failures, and unexpected error patterns that may indicate latent High/Critical bugs. Flag anomalies for manual verification.
+
+**Output a one-paragraph codebase summary** (include build status) before proceeding to Phase 2.
 
 ---
 
