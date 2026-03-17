@@ -276,6 +276,140 @@ public fun compound(principal: u64, rate_bps: u64, periods: u64): u64 {
 
 ---
 
+## DEFI-85 — Multiply-Before-Divide Overflow in Fixed-Point Helpers
+
+**Description:** Fixed-point math libraries (WAD/RAY/Decimal wrappers) store scaled values and
+enforce bounds internally. When `A.mul(B)` computes `(A.value * B.value) / WAD`, the
+intermediate product can exceed the library's `VALUE_MAX` and abort — even though the
+final result after `.div(C)` would be small. This is a hidden overflow: the calling code
+looks correct (`from(x).mul(from(y)).div(from(z))`) but the helper aborts before the
+division is reached.
+
+**This bug class is HIGH/CRITICAL when:**
+1. The overflowing function is called by every user-facing operation (deposit, withdraw, borrow, repay, liquidate, claim)
+2. The overflow occurs before a state checkpoint (`last_update_time`, `cumulative_index`)
+3. The time delta grows after each failed attempt, making recovery impossible
+4. Admin recovery paths (cancel, close) also trigger the same update
+
+**Mandatory analysis steps:**
+
+**Step 1 — Derive helper bounds.** Open the fixed-point module. For `mul(a, b)`:
+```
+Internal: result = (a.value * b.value) / WAD
+Bound check: result <= VALUE_MAX
+Simplifies to: a.value * b.value <= VALUE_MAX * WAD
+If VALUE_MAX = U64_MAX and both a, b are from(u64):
+  a.value = input_a * WAD, b.value = input_b * WAD
+  intermediate = input_a * WAD * input_b * WAD / WAD = input_a * input_b * WAD
+  bound: input_a * input_b * WAD <= U64_MAX * WAD
+  simplifies to: input_a * input_b <= U64_MAX
+```
+
+**Step 2 — Derive overflow threshold.** For the specific call site:
+```
+Example: float::from(total_rewards).mul(float::from(time_passed_ms))
+Overflow when: total_rewards * time_passed_ms > U64_MAX (~1.844e19)
+
+Token: USDC (6 decimals) → 500,000 USDC = 5e11 atomic units
+Overflow at: time_passed_ms = U64_MAX / 5e11 = 3.69e7 ms ≈ 10.25 hours
+
+Token: SUI (9 decimals) → 1,000 SUI = 1e12 atomic units
+Overflow at: time_passed_ms = U64_MAX / 1e12 = 1.844e7 ms ≈ 5.12 hours
+```
+
+**Step 3 — Compute threshold table for realistic reward amounts:**
+
+| Reward Amount | Token Decimals | Atomic Units | Max Inactivity Before Overflow |
+|--------------|----------------|-------------|-------------------------------|
+| 10,000 USDC | 6 | 1e10 | ~21.3 days |
+| 100,000 USDC | 6 | 1e11 | ~2.13 days |
+| 500,000 USDC | 6 | 5e11 | ~10.25 hours |
+| 1,000,000 USDC | 6 | 1e12 | ~5.12 hours |
+| 10,000,000 USDC | 6 | 1e13 | ~30.7 minutes |
+| 1,000 SUI | 9 | 1e12 | ~5.12 hours |
+
+**Pattern:**
+```move
+// VULNERABLE — mul overflows before div can normalize
+let unlocked_rewards =
+    float::from(pool_reward.total_rewards)
+        .mul(float::from(time_passed_ms))        // aborts when product > U64_MAX
+        .div(float::from(pool_reward.end_time_ms - pool_reward.start_time_ms));
+
+// SAFE — div first, then mul (intermediate stays within bounds)
+let unlocked_rewards =
+    float::from(pool_reward.total_rewards)
+        .div(float::from(pool_reward.end_time_ms - pool_reward.start_time_ms))
+        .mul(float::from(time_passed_ms));
+// (total_rewards / duration) is always <= total_rewards, so the subsequent mul
+// can only overflow if time_passed > duration, which is bounded by the reward period.
+```
+
+**Check:**
+1. Open EVERY fixed-point helper used by the protocol. Read `mul`, `div`, `from`. Derive the internal overflow bound.
+2. For every call of the form `from(A).mul(from(B)).div(from(C))` — prove `A * B <= VALUE_MAX` OR flag it
+3. Compute a threshold table using the protocol's actual token decimals and realistic amounts
+4. If overflow is reachable, apply the Recoverability Matrix (common-move.md 12.1)
+5. Cross-ref: common-move.md 2.6, DEFI-86
+
+---
+
+## DEFI-86 — Accumulator Checkpoint Liveness (Abort-Before-State-Advance)
+
+**Description:** A periodic accumulator update function (reward index, interest accrual,
+fee distribution) performs arithmetic that can abort, and the state checkpoint
+(`last_update_time`, `cumulative_index`, `reward_per_share`) is written AFTER the
+potentially-aborting line. Once the abort fires, the checkpoint stays stale, causing the
+time delta to grow on every retry until the function becomes permanently uncallable.
+
+**Why it matters for DeFi:** Accumulator updates are called by nearly every user-facing
+operation — deposit, withdraw, borrow, repay, liquidate, claim. A stuck accumulator
+freezes the entire pool.
+
+**Pattern:**
+```move
+// VULNERABLE — checkpoint after abort-prone line
+public fun update_pool_reward(pool: &mut Pool, clock: &Clock) {
+    let now = clock::timestamp_ms(clock);
+    let elapsed = now - pool.last_update_time_ms;              // grows if update fails
+
+    let new_rewards = compute_rewards(pool.total_rewards, elapsed);  // CAN ABORT (overflow)
+
+    pool.accumulated_rewards = pool.accumulated_rewards + new_rewards;
+    pool.last_update_time_ms = now;  // <-- NEVER REACHED if compute_rewards aborts
+}
+
+// SAFE — use safe arithmetic that cannot abort, OR reorder to divide-first
+public fun update_pool_reward(pool: &mut Pool, clock: &Clock) {
+    let now = clock::timestamp_ms(clock);
+    let elapsed = now - pool.last_update_time_ms;
+
+    // Option A: reorder to prevent overflow (see DEFI-85)
+    let rate = float::from(pool.total_rewards).div(float::from(pool.duration));
+    let new_rewards = rate.mul(float::from(elapsed));
+
+    pool.accumulated_rewards = pool.accumulated_rewards + new_rewards;
+    pool.last_update_time_ms = now;
+}
+```
+
+**Check:**
+1. For every function that updates a cumulative accumulator or timestamp checkpoint:
+   - Is there ANY arithmetic between reading `now` and writing the checkpoint?
+   - Can that arithmetic abort (overflow, divide-by-zero, assertion)?
+   - If it aborts, does the checkpoint remain stale?
+2. If yes: trace ALL entry points that call this update:
+   - User actions: deposit, withdraw, borrow, repay
+   - Liquidation: liquidate, seize, ADL
+   - Claims: claim_rewards, harvest
+   - Admin: cancel_reward, close_pool, update_config
+3. If ALL paths go through the stuck update → **permanent deadlock** → HIGH/CRITICAL
+4. If some paths bypass the update → conditional deadlock → lower severity
+5. Compute the time-to-overflow threshold (see DEFI-85 threshold table)
+6. Cross-ref: common-move.md 12.1, DEFI-85
+
+---
+
 ## Math / Precision Verification Checklist
 
 - [ ] All financial calculations multiply before dividing (DEFI-35)
@@ -286,3 +420,6 @@ public fun compound(principal: u64, rate_bps: u64, periods: u64): u64 {
 - [ ] Oracle price direction (A/B vs B/A) documented and verified at each use (DEFI-40)
 - [ ] Time units consistent: Sui ms converted, Aptos seconds verified (DEFI-41)
 - [ ] Compound interest uses binary exponentiation with u128 precision (DEFI-42)
+- [ ] Fixed-point helper `mul` intermediate product cannot overflow before normalizing division (DEFI-85)
+- [ ] Every accumulator checkpoint is written BEFORE or ATOMICALLY WITH potentially-aborting arithmetic (DEFI-86)
+- [ ] Overflow thresholds computed with production token decimals and realistic amounts for all `from(A).mul(from(B))` calls (DEFI-85)

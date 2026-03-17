@@ -78,6 +78,44 @@ let result = balance - fee; // aborts if fee > balance
 **Risk:** Silent truncation of high bits.
 **Check:** All narrowing casts should have bounds assertions.
 
+### 2.6 Fixed-Point Helper Library Overflow (Multiply-Before-Divide)
+
+**Pattern:** Protocol uses a fixed-point math library (e.g., `float.move`, `decimal.move`, `wad_ray.move`) whose `mul` function computes `(a.value * b.value) / WAD` internally. The intermediate product `a.value * b.value` can overflow and abort **before** the normalizing division executes. When the caller does `A.mul(B).div(C)`, the overflow in `mul` fires before `div(C)` can reduce the result to a safe range.
+
+**Risk:** If the abort occurs inside a periodic accounting update (reward accumulator, interest accrual, index refresh) and the state checkpoint (`last_update_time`, `cumulative_index`) is written **after** the overflowing line, the state never advances. Every future call hits the same overflow with an ever-growing time delta — **permanent, irrecoverable protocol deadlock**.
+
+**Why this is different from 2.2:** Section 2.2 checks expression-level multiply-before-divide for precision loss. This check targets **hidden overflow inside helper library internals** that the calling module cannot see. The calling code looks safe (`from(x).mul(from(y)).div(from(z))`) but the helper's internal representation and bounds enforcement create an overflow that fires before the division.
+
+```move
+// VULNERABLE — overflow hidden inside float::mul
+// float::mul does: (a.value * b.value) / WAD, then asserts result <= VALUE_MAX
+// If total_rewards * time_passed_ms > U64_MAX, the mul aborts before div executes
+let unlocked_rewards =
+    float::from(pool_reward.total_rewards)
+        .mul(float::from(time_passed_ms))       // <-- OVERFLOW HERE
+        .div(float::from(duration));             // never reached
+
+// SAFE — divide first, then multiply (intermediate stays small)
+let unlocked_rewards =
+    float::from(pool_reward.total_rewards)
+        .div(float::from(duration))              // total_rewards / duration <= total_rewards
+        .mul(float::from(time_passed_ms));       // result * time_passed <= total_rewards
+```
+
+**Check:**
+1. Identify ALL fixed-point/decimal helper modules used by the target protocol (`float`, `decimal`, `wad_ray`, `fixed_point32`, `fixed_point64`, `math`)
+2. **Open each helper module.** Read `mul`, `div`, `from`, `floor`, `ceil`. Derive:
+   - Internal representation (e.g., `value * WAD` where WAD = 1e18)
+   - Intermediate expression in `mul` (e.g., `a.value * b.value / WAD`)
+   - Maximum allowed value (e.g., `VALUE_MAX = U64_MAX * WAD`)
+   - Whether overflow check fires before or after the normalizing division
+3. For every call site of the form `A.mul(B).div(C)` or `A * B / C` using helpers:
+   - Derive: can `A * B` (in raw scaled representation) exceed the helper's max before `/ C` executes?
+   - Derive concrete bounds: what values of A and B trigger overflow?
+   - Use production-realistic values (token decimals, time in ms, reward amounts)
+4. If overflow is reachable, check whether it occurs **before a state checkpoint** (see 12.1)
+5. Cross-ref: 12.1, DEFI-85, DEFI-86
+
 ### 2.5 Bitwise Operations — No Overflow Protection
 
 **Pattern:** Move auto-aborts on arithmetic overflow (addition, subtraction, multiplication), but bitwise operations (`<<`, `>>`, `&`, `|`, `^`) have **no such safeguards**. Bit shifts can silently overflow or produce unexpected results.
@@ -736,6 +774,104 @@ public fun repay_on_behalf(
 
 ---
 
+## 12. Arithmetic / Accounting DoS
+
+### 12.1 Abort-Before-Checkpoint Deadlock
+
+**Pattern:** A periodic accounting function (reward accumulator update, interest accrual, index refresh) performs arithmetic that can abort, and the state checkpoint (`last_update_time`, `cumulative_index`, `reward_per_share`) is written **after** the potentially-aborting line. If the arithmetic aborts, the checkpoint never advances. On the next call, the time delta is even larger, making the overflow worse — the function is permanently uncallable.
+
+**Risk:** Every operation that calls the stuck accounting function also reverts. In lending protocols, this typically freezes deposits, withdrawals, borrows, repayments, liquidations, and reward claims for the affected pool/CoinType. Undercollateralized positions cannot be liquidated, causing unbounded bad debt.
+
+```move
+// VULNERABLE — checkpoint written AFTER the overflowing computation
+public fun update_pool_reward(pool_reward: &mut PoolReward, clock: &Clock) {
+    let now = clock::timestamp_ms(clock);
+    let time_passed = now - pool_reward.last_update_time_ms;     // grows every second
+
+    // This line aborts when total_rewards * time_passed > U64_MAX
+    let unlocked = float::from(pool_reward.total_rewards)
+        .mul(float::from(time_passed))                            // <-- ABORT
+        .div(float::from(pool_reward.duration));
+
+    pool_reward.accumulated = pool_reward.accumulated + unlocked;
+    pool_reward.last_update_time_ms = now;                        // <-- NEVER REACHED
+}
+
+// SAFE — reorder arithmetic OR checkpoint before risky computation
+// Option A: divide first (prevents overflow)
+let unlocked = float::from(pool_reward.total_rewards)
+    .div(float::from(pool_reward.duration))
+    .mul(float::from(time_passed));
+
+// Option B: cap time_passed to remaining duration
+let time_passed = math::min(time_passed, pool_reward.end_time_ms - pool_reward.last_update_time_ms);
+```
+
+**Check:**
+1. For every periodic update function (grep: `last_update`, `last_accrual`, `last_checkpoint`, `cumulative_index`, `reward_per_share`):
+   - Is the checkpoint variable written AFTER potentially-aborting arithmetic?
+   - If the function aborts, does the time delta grow on every retry?
+2. If yes → apply the **Recoverability Matrix** below
+
+### 12.2 Admin-Origin Latent User DoS
+
+**Pattern:** An admin performs a normal, expected configuration action (adding rewards, setting parameters, enabling a feature). The configuration is valid and reasonable at creation time. Later, under production conditions (pool inactivity, time passage, token accumulation), the configuration causes a user-facing function to abort. The admin action is the **origin**, but the **victims** are unprivileged users and liquidators.
+
+**Risk:** This is commonly dismissed as "admin-only" or "trusted admin." That is incorrect when:
+- The admin action is routine and expected (adding a reward program, setting a fee)
+- The failure occurs later in a permissionless code path
+- Users/liquidators are the ones blocked, not the admin
+- The admin cannot fix it because recovery paths traverse the same failing code
+
+**Severity Rule:** Severity is based on **who is blocked and what is blocked**, not who created the initial configuration.
+- Users cannot withdraw → fund lock → **High/Critical**
+- Liquidations blocked → bad debt accumulation → **High**
+- Only admin convenience impacted → **Low/Medium**
+
+**Check:**
+1. For every admin-configurable parameter that enters a mathematical expression in a user-facing path:
+   - Can the configured value, combined with elapsed time or accumulated state, overflow?
+   - What is the maximum safe value? Express in atomic units with token decimals.
+   - What is the realistic operational range? (e.g., 500K USDC reward over 30 days)
+2. Never dismiss a finding as "admin-only" if users or liquidators are bricked
+3. Cross-ref: 2.6, 12.1, DEFI-85
+
+### Recoverability Matrix (mandatory for every DoS candidate)
+
+For every suspected DoS/deadlock, answer ALL of these before assigning severity:
+
+| Question | Answer |
+|----------|--------|
+| **What call first aborts?** | Name the exact function and line |
+| **Does abort occur before checkpoint/state advance?** | If yes → state is stuck |
+| **Does the failing condition worsen over time?** | e.g., time_delta grows → overflow gets worse |
+| **Can admin cancel/close/modify to fix?** | Trace cancel/close paths — do they call the same update? |
+| **Can users claim/withdraw to work around it?** | Trace claim/withdraw — do they also trigger the update? |
+| **Is there an emergency/bypass path?** | Admin pause, emergency withdraw, governance override? |
+| **Is the deadlock temporary, conditional, or permanent?** | Temporary: resolves on its own; Conditional: requires specific action; Permanent: only fixable by protocol upgrade |
+
+**Severity from matrix:**
+- Permanent deadlock + fund lock + no bypass → **Critical**
+- Permanent deadlock + blocked liquidations → **High**
+- Conditional deadlock with admin recovery path → **Medium**
+- Temporary DoS that self-resolves → **Low**
+
+**Example — Reward Manager Overflow:**
+
+| Question | Answer |
+|----------|--------|
+| What call first aborts? | `update_pool_reward_manager` at `float::from(total_rewards).mul(float::from(time_passed))` |
+| Before checkpoint? | Yes — `last_update_time_ms` is written after the abort point |
+| Worsens over time? | Yes — `time_passed` grows every millisecond |
+| Admin cancel? | `cancel_pool_reward` calls `update_pool_reward_manager` → also aborts |
+| User claim? | `claim_rewards` calls `update_pool_reward_manager` → also aborts |
+| Emergency bypass? | None — no function modifies `last_update_time_ms` without calling update |
+| Duration? | **Permanent** — only fixable by protocol version upgrade |
+
+**Result:** Permanent fund freeze + blocked liquidations → **High**
+
+---
+
 ## Verification Checklist
 
 Run through each item and mark ✅ (clean) or ❌ (finding):
@@ -770,6 +906,10 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] All time comparisons use correct operator direction (10.3)
 - [ ] Liquidation functions pass correct variables — debt vs collateral (10.4)
 - [ ] Permissionless terminal-state transitions clean up all cross-module sub-objects (11.1)
+- [ ] All fixed-point helper libraries opened and value bounds derived — `mul` intermediate cannot overflow before normalizing division (2.6)
+- [ ] Every periodic accounting update writes checkpoint BEFORE or ATOMICALLY WITH potentially-aborting arithmetic (12.1)
+- [ ] Admin-configured parameters validated against overflow bounds using production-realistic values and token decimals (12.2)
+- [ ] Recoverability Matrix completed for every DoS candidate — cancel/claim/close paths checked for shared failure (12.1, 12.2)
 
 > **Deep-dive prompts and the Move Vulnerability Patterns prompt pack have been moved to
 > `audit-prompts.md` in this directory.** Load that file for targeted per-module,

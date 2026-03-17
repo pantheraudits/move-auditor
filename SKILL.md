@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.0.0"
+  version: "3.1.0"
   author: pantheraudits
   category: security
   tags:
@@ -170,6 +170,8 @@ Work through every check in `common-move.md`, then the chain-specific reference.
 2. If found: record location, describe impact, assign severity
 3. If clean: note it as verified
 
+**Fixed-point helper inspection (mandatory):** For every module that uses a fixed-point math library (`float`, `decimal`, `wad_ray`, `fixed_point32/64`, or any custom `Decimal`/`WAD` wrapper), **open the helper source code** and derive the internal overflow bounds for `mul`, `div`, `from`, `floor`, `ceil`. Do not trust that the calling code is safe just because it reads `A.mul(B).div(C)` — the intermediate `A.mul(B)` may overflow inside the helper before `.div(C)` executes. See common-move.md 2.6, DEFI-85, DEFI-86.
+
 **Do not skip checks.** A clean check is still a check — mark it ✅.
 
 **Dead Code / Unreachable Branch Detection:**
@@ -244,6 +246,13 @@ Required pairs to check in every lending protocol audit:
    Do operations during an active flash loan see stale accounting fields (cash, total_borrows)?
    If hot potato guarantees repayment, not updating cash is intentional (DESIGN-L2). But if
    other operations READ the stale value mid-PTB, they may misprice shares or health. (→ DESIGN-L2 caveat)
+
+9. **reward_manager_update ↔ all lending operations** —
+   Does the reward/accumulator update function perform arithmetic that can abort BEFORE
+   writing `last_update_time` or equivalent checkpoint? If yes: does every user-facing
+   operation (deposit, withdraw, borrow, repay, liquidate, claim) AND every admin
+   recovery operation (cancel_reward, close_pool) call this update? If ALL paths are
+   trapped → permanent deadlock for that CoinType/pool. (→ common-move.md 12.1, DEFI-85, DEFI-86)
 
 For any interaction pair where the answer is NO → report as HIGH.
 This phase is mandatory. Do not skip it even if all per-file scans were clean.
@@ -443,6 +452,8 @@ test coverage gaps, centralization risks, upgrade risks.
 | Info     | Code quality, gas inefficiency, documentation gaps, non-exploitable patterns |
 
 **Likelihood × Impact = Severity.** A theoretically catastrophic bug that requires a nation-state adversary is not Critical. A low-impact bug that's trivially exploitable is Medium, not Low.
+
+**Admin-origin latent user DoS:** Never dismiss a bug as "admin-only" or "trusted setup" if the admin action is routine (e.g., adding a reward program, setting a fee rate) and unprivileged users or liquidators are later bricked. Severity is based on who is blocked and what is blocked (fund lock, liquidation failure), not on who created the initial configuration. See common-move.md 12.2.
 
 ---
 

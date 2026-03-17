@@ -11,6 +11,58 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.1.0] — 2026-03-17
+
+### Arithmetic/Accounting DoS — Catch hidden fixed-point overflow and accumulator deadlock
+
+Based on a missed High-severity finding in a Sui lending protocol where a multiply-before-divide
+overflow inside a fixed-point helper permanently froze all lending operations. The overflow
+occurred in `float::mul` before the normalizing division could execute, and the abort happened
+before `last_update_time_ms` was checkpointed — creating an irrecoverable deadlock.
+
+**common-move.md:**
+- **2.6 Fixed-Point Helper Library Overflow:** Mandatory check to open fixed-point helper modules
+  (`float`, `decimal`, `wad_ray`) and derive internal overflow bounds for `mul`/`div`/`from`.
+  Targets hidden overflow where calling code looks safe (`A.mul(B).div(C)`) but the helper
+  aborts before `div(C)` executes
+- **12.1 Abort-Before-Checkpoint Deadlock:** Checks that state checkpoints (`last_update_time`,
+  `cumulative_index`) are written before or atomically with potentially-aborting arithmetic.
+  Includes concrete example with reward manager pattern
+- **12.2 Admin-Origin Latent User DoS:** Explicit guidance that admin-configured parameters
+  are reportable as High/Critical when users/liquidators are later bricked
+- **Recoverability Matrix:** Mandatory 7-question matrix for every DoS candidate — traces
+  cancel/claim/close/emergency paths to determine if deadlock is temporary, conditional,
+  or permanent
+- **4 new verification checklist items** for sections 2.6, 12.1, 12.2
+
+**defi/defi-math-precision.md:**
+- **DEFI-85:** Multiply-Before-Divide Overflow in Fixed-Point Helpers — full analysis
+  methodology with 3-step process (derive helper bounds → compute overflow threshold →
+  build threshold table with production token decimals). Includes worked example with
+  USDC/SUI reward programs showing overflow at 10.25 hours / 5.12 hours of inactivity
+- **DEFI-86:** Accumulator Checkpoint Liveness — detects abort-before-state-advance
+  patterns in reward/interest accumulators. Includes entry point tracing checklist
+- **3 new verification checklist items** for DEFI-85, DEFI-86
+
+**SKILL.md:**
+- **Phase 3:** Added mandatory fixed-point helper inspection step — auditor must open
+  helper source and derive overflow bounds, not trust calling code at face value
+- **Phase 5 pair 9:** `reward_manager_update ↔ all lending operations` — checks whether
+  accumulator abort-before-checkpoint traps all user and admin paths
+- **Severity Reference:** Added admin-origin latent user DoS guidance — severity is based
+  on who is blocked (users/liquidators), not who created the configuration
+
+### Impact
+This release ensures the auditor will:
+1. Always open and inspect fixed-point math helper internals (not just calling code)
+2. Derive concrete overflow bounds using production token decimals and time units
+3. Check checkpoint ordering in every accumulator update function
+4. Trace all entry points through stuck accumulators (including admin cancel/close)
+5. Never dismiss a finding as "admin-only" when users are the actual victims
+6. Complete a Recoverability Matrix before assigning DoS severity
+
+---
+
 ## [3.0.0] — 2026-03-14
 
 ### Added

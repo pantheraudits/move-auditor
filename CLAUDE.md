@@ -24,7 +24,7 @@ The skill lives in `move-auditor/` and is installed by copying that directory to
    - `defi-slippage.md` (DEFI-43–49), `defi-liquidation.md` (DEFI-50–66)
    - `defi-auction-clm.md` (DEFI-67–73), `defi-signatures.md` (DEFI-74–79)
    - `defi-lending-design-patterns.md` (DESIGN-L1–L4, known-good patterns)
-   - Next available ID: **DEFI-85**
+   - Next available ID: **DEFI-87**
 6. **New reference files** (e.g., a vulnerability database) go in `move-auditor/`
    and must be referenced from `SKILL.md` with a load instruction
 
