@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.2.0"
+  version: "3.3.0"
   author: pantheraudits
   category: security
   tags:
@@ -42,9 +42,12 @@ file in this skill's directory (e.g., if SKILL.md is at
 | File | When to load |
 |------|-------------|
 | `common-move.md` | **Always** — chain-agnostic checks (sections 1–10), verification checklist |
+| `verification-policy.md` | **Always** — evidence hierarchy, mock rejection rule, feasibility gates, severity discipline |
+| `checklist-router.md` | **Always** — deterministic coverage plan; maps detected protocol features to files and mandatory follow-up checks |
 | `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-28 |
 | `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-24 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
+| `semantic-gap-checks.md` | When the protocol has accumulators, checkpoints, rewards, lending state, cross-module accounting, or multi-step state transitions |
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`) — DEFI-11 to DEFI-16 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
 | `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
@@ -80,11 +83,14 @@ You are a senior Move security researcher. Your job is to find real, exploitable
 - Presence of `aptos_framework`, `aptos_std`, `#[test_only]` → **Aptos Move**
 - Load reference files from the skill directory (see Reference Files table above):
   - **Always** → read `common-move.md`
+  - **Always** → read `verification-policy.md`
+  - **Always** → read `checklist-router.md`
   - **Sui** → also read `sui-patterns.md`
   - **Aptos** → also read `aptos-patterns.md`
   - **DeFi protocols** → also read `defi-vectors.md`, then check the subcategory detection
     table inside it and load relevant `defi/*.md` files (multiple may apply — e.g., a lending
     protocol should load `defi-lending.md`, `defi-liquidation.md`, and `defi-oracle.md`)
+  - **Accumulator / checkpoint / rewards / cross-module accounting signals** → also read `semantic-gap-checks.md`
 
 **Map the codebase:**
 ```
@@ -96,6 +102,16 @@ You are a senior Move security researcher. Your job is to find real, exploitable
 - Identify any cross-module calls
 - Estimate complexity: LoC, number of entry points, external dependencies
 ```
+
+**Coverage Plan (mandatory):**
+Before moving on, use `checklist-router.md` to derive a short coverage plan:
+- detected chain
+- detected protocol families
+- special feature flags (`public fun` on Sui, dynamic fields, fixed-point helpers, checkpoints, reward indices, rate model setters)
+- reference files loaded because of those signals
+- mandatory follow-up passes still required later in the workflow
+
+Do not rely on intuition alone for file loading. If a route fires, load the file.
 
 **Entry Point Classification (from Trail of Bits methodology):**
 Attack surface differs by chain — the same visibility keyword means different things:
@@ -171,6 +187,10 @@ For each pair, check: (a) rounding direction, (b) state consistency, (c) oracle 
 
 ### Phase 3 — Structured Vulnerability Scan
 
+Before starting the per-check scan, confirm the coverage plan from `checklist-router.md`
+is complete. If the codebase contains a signal with no corresponding deep check loaded,
+fix the plan first.
+
 Work through every check in `common-move.md`, then the chain-specific reference. For each check:
 
 1. Search the codebase for the pattern
@@ -205,7 +225,30 @@ If the protocol involves tokens, swaps, lending, staking, or oracles:
 
 ---
 
-### Phase 5 — Cross-Module Interaction Scan
+### Phase 5 — Semantic Gap & Stale-State Scan
+
+If the protocol contains:
+
+- multiple accounting variables for one concept
+- reward indices or accumulators
+- checkpoints, snapshots, or `last_update_*` fields
+- lending state spread across multiple modules
+- liquidation, emode, reserve, or rewards modules
+
+then read `semantic-gap-checks.md` and run this phase before cross-module interaction review.
+
+Required outputs:
+
+- writer path
+- stale or mismatched consumer path
+- persistence window
+- numeric trace for any High/Critical candidate
+
+This phase is mandatory for lending, staking, vault, reward, liquidation, and oracle-heavy protocols.
+
+---
+
+### Phase 6 — Cross-Module Interaction Scan
 
 After completing per-file analysis, explicitly trace these interaction pairs.
 For each pair, ask: does function A in module X leave module Y in an
@@ -266,11 +309,19 @@ This phase is mandatory. Do not skip it even if all per-file scans were clean.
 
 ---
 
-### Phase 6 — Verify & Triage (Move-Expert Validation)
+### Phase 7 — Verify & Triage (Move-Expert Validation)
 
-Before reporting, every candidate finding from Phases 3-5 must survive a Move-expert
+Before reporting, every candidate finding from Phases 3-6 must survive a Move-expert
 verification pass. This phase eliminates false positives, corrects inflated severities,
 and ensures only real, exploitable findings reach the report.
+
+Before verifying any finding, read `verification-policy.md` and apply:
+
+- evidence source tagging
+- the mock rejection rule
+- reachability gate
+- math-bounds gate
+- severity discipline for High/Critical
 
 **Step 1 — Dual Narrative Test**
 
@@ -349,13 +400,10 @@ Systematically challenge each finding against Move's unique properties:
 
 **Step 3 — Label Each Finding**
 
-- **VALID** — Survives all 8 dimensions. Exploitable on mainnet. Include at stated severity.
-- **QUESTIONABLE** — Partially validated. Needs manual PoC on testnet. Flag with the
-  uncertain dimension for human reviewer.
-- **DISMISSED** — Disproven by Move's type system, object model, call path, or economics.
-  Document in "Verified Clean Checks" with the disproof dimension and reasoning.
-- **OVERCLASSIFIED** — Real issue, severity inflated. Downgrade with reasoning
-  (e.g., "Critical → Medium: requires admin key compromise").
+- **VALID** — Survives all checks. Exploitable on mainnet. Include at stated severity.
+- **QUESTIONABLE** — Plausible, but decisive proof is missing or the dismissal depends on weak evidence.
+- **DISMISSED** — Disproven by trusted local evidence (`[CODE]`, `[TEST]`, `[PROD-SOURCE]`, `[PROD-STATE]`).
+- **OVERCLASSIFIED** — Real issue, severity inflated. Downgrade with reasoning.
 
 **Step 4 — Mandatory Kill Questions**
 
@@ -386,13 +434,16 @@ need to change, not by downstream effect:
 
 Keep only the highest-impact framing of each root cause.
 
-**Output rules:** Only VALID and QUESTIONABLE findings proceed to Phase 7.
+**Evidence Audit (mandatory):** For every non-trivial finding, include a short evidence
+table from `verification-policy.md` showing each decisive claim and its source tag.
+
+**Output rules:** Only VALID and QUESTIONABLE findings proceed to Phase 8.
 DISMISSED findings go to "Verified Clean Checks" with dismissal reason.
 OVERCLASSIFIED findings proceed at adjusted severity.
 
 ---
 
-### Phase 7 — Report
+### Phase 8 — Report
 
 Produce a structured audit report in this exact format:
 

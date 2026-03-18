@@ -11,6 +11,36 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.3.0] — 2026-03-19
+
+### Workflow and verification improvements
+
+Adds three new reference files that improve coverage selection, state-consistency
+review, and verification rigor for subtle High/Critical Move bugs:
+
+- **`checklist-router.md`** — improves coverage planning from detected protocol signals
+- **`semantic-gap-checks.md`** — adds a dedicated stale-state and state-desync review pass
+- **`verification-policy.md`** — strengthens exploitability validation and severity discipline
+
+**SKILL.md:**
+- Added the 3 new files to Reference Files and made `verification-policy.md` +
+  `checklist-router.md` mandatory on every audit
+- **Phase 1:** now requires a router-driven coverage plan instead of purely
+  heuristic file loading
+- **Phase 5:** new Semantic Gap & Stale-State Scan before cross-module interaction review
+- **Verify & Triage:** now applies stronger evidence requirements plus
+  reachability/math feasibility gates
+- Report triage now uses the existing finding labels with stronger evidence requirements
+
+**README.md:**
+- Documented the new router-driven coverage step, semantic-gap pass, and
+  stronger verification workflow
+- Added the 3 new files to the published skill structure
+
+This release is focused on reducing false refutations and improving detection of
+state-desync bugs such as stale checkpoints, skipped accumulator writes,
+cross-module cleanup gaps, and dual-source metric inconsistencies.
+
 ## [3.2.0] — 2026-03-17
 
 ### Build & Test Log Analysis — Runtime-informed vulnerability detection

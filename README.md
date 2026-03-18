@@ -62,10 +62,12 @@ indicate latent High/Critical bugs invisible to static-only review.
 The skill also **auto-activates** when `.move` files are present or when you ask about Move security. It will:
 
 1. Detect chain (Sui or Aptos) and load relevant patterns
-2. Map the codebase structure and attack surface
-3. Run a full vulnerability scan (130+ patterns across chain-agnostic, chain-specific, and DeFi checks)
-4. Verify & triage every finding through a Move-expert validation pass (7 disproof dimensions)
-5. Produce a structured audit report with severity, confidence, PoC scenario, and fix
+2. Build a router-driven coverage plan from protocol signals before deep scanning
+3. Map the codebase structure and attack surface
+4. Run a full vulnerability scan (130+ patterns across chain-agnostic, chain-specific, and DeFi checks)
+5. Run a semantic-gap pass for stale state, skipped checkpoints, and cross-module accounting drift
+6. Verify & triage every finding through a stricter Move-expert validation pass
+7. Produce a structured audit report with severity, confidence, PoC scenario, and fix
 
 **Read the full write-up:** [The Move Auditor — Blog Post](https://pantheraudits.com/blog/the-move-auditor.html)
 
@@ -74,8 +76,11 @@ The skill also **auto-activates** when `.move` files are present or when you ask
 
 ```
 move-auditor/
-├── SKILL.md                     # Orchestrator — 6-phase workflow with verify & triage
+├── SKILL.md                     # Orchestrator — workflow with coverage routing, semantic-gap scan, and stronger verify & triage
 ├── common-move.md               # Chain-agnostic Move security checks + checklist
+├── verification-policy.md       # Evidence hierarchy, feasibility gates, severity discipline
+├── checklist-router.md          # Signal-based coverage planner and file router
+├── semantic-gap-checks.md       # Stale-state, accumulator, and cross-module desync checks
 ├── sui-patterns.md              # Sui-specific patterns (SUI-01 to SUI-27)
 ├── aptos-patterns.md            # Aptos-specific patterns (APT-01 to APT-23)
 ├── defi-vectors.md              # DeFi attack vectors (DEFI-01 to DEFI-10) + subcategory router
@@ -107,6 +112,7 @@ AI-assisted audit output **must be manually verified**. This skill accelerates y
 - [ ] Sui DeFi protocol-specific patterns (Cetus, Aftermath, Turbos)
 - [ ] Aptos DeFi protocol-specific patterns (Thala, Aries, Echelon)
 - [ ] Automated grep patterns for common Move anti-patterns
+- [ ] Machine-readable audit artifacts (`coverage-plan`, validated findings, structured clean checks)
 - [ ] Report templates for private audits vs. contest submissions
 - [ ] Benchmarking the skill against baseline prompts and manual review to see where it actually makes a difference 
 
