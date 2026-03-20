@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.3.0"
+  version: "3.4.0"
   author: pantheraudits
   category: security
   tags:
@@ -29,6 +29,13 @@ This skill activates whenever:
 
 When activated, immediately begin **Phase 1** without waiting for instructions.
 
+## When NOT to Use
+
+- Non-Move contracts (Solidity, Rust/Anchor, EVM, TEAL, FunC)
+- General code review for style, performance, or refactoring
+- Writing Move code, generating patches, or fixing bugs
+- When user explicitly requests a quick scan without full verification
+
 ---
 
 ## Reference Files
@@ -44,6 +51,9 @@ file in this skill's directory (e.g., if SKILL.md is at
 | `common-move.md` | **Always** — chain-agnostic checks (sections 1–10), verification checklist |
 | `verification-policy.md` | **Always** — evidence hierarchy, mock rejection rule, feasibility gates, severity discipline |
 | `checklist-router.md` | **Always** — deterministic coverage plan; maps detected protocol features to files and mandatory follow-up checks |
+| `move-fp-catalog.md` | **Always** — rationalizations to reject, Move FP catalog, self-hallucination check |
+| `evidence-chains.md` | **Phase 7** — structured evidence templates for data flow, math proofs, PoC |
+| `confidence-gates.md` | **Phase 7** — confidence gating, hard evidence requirements per finding type |
 | `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-28 |
 | `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-24 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
@@ -64,13 +74,7 @@ file in this skill's directory (e.g., if SKILL.md is at
 
 ## Auditor Mindset
 
-You are a senior Move security researcher. Your job is to find real, exploitable vulnerabilities — not theoretical ones. Before diving into code:
-
-- **Think like an attacker first.** Ask: "If I wanted to steal funds / bypass access control / corrupt state — where would I start?"
-- **Trace value flows.** Follow tokens, coins, and objects from entry to exit. Every transfer is a potential exploit vector.
-- **Question every assumption.** Protocols assume callers are honest. They're not.
-- **Chain findings.** Low-severity issues often chain into critical ones. Flag combinations.
-- **Verify, don't guess.** If you're unsure a bug is exploitable, describe the PoC scenario explicitly rather than inflating severity.
+You are a senior Move security researcher. Find real, exploitable vulnerabilities — not theoretical ones. Think like an attacker, trace value flows end-to-end, question every assumption, chain low-severity issues into critical ones, and verify with PoC scenarios rather than guessing. Consult `move-fp-catalog.md` to avoid common false positives.
 
 ---
 
@@ -85,6 +89,7 @@ You are a senior Move security researcher. Your job is to find real, exploitable
   - **Always** → read `common-move.md`
   - **Always** → read `verification-policy.md`
   - **Always** → read `checklist-router.md`
+  - **Always** → read `move-fp-catalog.md`
   - **Sui** → also read `sui-patterns.md`
   - **Aptos** → also read `aptos-patterns.md`
   - **DeFi protocols** → also read `defi-vectors.md`, then check the subcategory detection
@@ -104,17 +109,10 @@ You are a senior Move security researcher. Your job is to find real, exploitable
 ```
 
 **Coverage Plan (mandatory):**
-Before moving on, use `checklist-router.md` to derive a short coverage plan:
-- detected chain
-- detected protocol families
-- special feature flags (`public fun` on Sui, dynamic fields, fixed-point helpers, checkpoints, reward indices, rate model setters)
-- reference files loaded because of those signals
-- mandatory follow-up passes still required later in the workflow
+Use `checklist-router.md` to derive a coverage plan listing: detected chain, protocol families, feature flags, reference files loaded, and required follow-up passes. If a route fires, load the file.
 
-Do not rely on intuition alone for file loading. If a route fires, load the file.
-
-**Entry Point Classification (from Trail of Bits methodology):**
-Attack surface differs by chain — the same visibility keyword means different things:
+**Entry Point Classification:**
+Attack surface differs by chain:
 
 | Visibility | Sui (PTB-callable?) | Aptos (tx entry?) |
 |------------|---------------------|-------------------|
@@ -124,38 +122,24 @@ Attack surface differs by chain — the same visibility keyword means different 
 | `public(package) fun` | No — package-internal | No — package-internal |
 | `fun` (private) | No | No |
 
-**Critical Sui distinction:** ALL `public fun` on Sui are callable from PTBs, not just `entry` ones. This makes Sui's attack surface significantly larger than Aptos for the same code.
+**Critical Sui distinction:** ALL `public fun` on Sui are PTB-callable, making Sui's attack surface larger than Aptos.
 
-**Access Control Classification — for each entry point, classify:**
+**Access Control Classification — for each entry point:**
 - **Sui:** Owned object with "Cap" in name → specific role; Owned object without "Cap" → Owner-gated; Shared object parameter with no cap → **Public/Unrestricted**
 - **Aptos:** `signer::address_of` compared to stored address → Role-based; `exists<*Cap>(addr)` → Capability-based; `&signer` with NO address check → **Review Required** (see APT-24)
 - Any function classified as Public/Unrestricted that mutates state → highest audit priority
 
-**Quick Maturity Assessment (adapted from Trail of Bits Code Maturity Framework):**
-- [ ] Arithmetic: Does the protocol use safe math? Are there overflow-prone u64 operations?
-- [ ] Testing: What % of entry points have test coverage? Are there integration tests?
-- [ ] Access Control: Is there a clear privilege hierarchy? Are admin keys governed?
-- [ ] Complexity: How many cross-module calls? How deep is the call stack for critical paths?
-- [ ] Documentation: Are invariants documented? Are design decisions commented?
-Flag any area scoring poorly — it deserves extra audit attention.
-
 **Build Detection & Test Log Analysis (conditional):**
-Before proceeding, check if the project is buildable (`Move.toml` exists + source compiles).
-- **Sui:** Run `sui move build` — if exit code 0 → `BUILD_AVAILABLE = true`
-- **Aptos:** Run `aptos move compile` — if exit code 0 → `BUILD_AVAILABLE = true`
-- If build fails → set `BUILD_AVAILABLE = false`, note build errors in the summary, skip test log analysis
-- If `BUILD_AVAILABLE = true` → run **Test Log Analysis** (see common-move.md Section 13 for full procedure). Run the project's test suite, capture output, and analyze logs for arithmetic aborts, assertion failures, and unexpected error patterns that may indicate latent High/Critical bugs. Flag anomalies for manual verification.
+Check if the project builds (`Move.toml` + `sui move build` or `aptos move compile`). If build succeeds (`BUILD_AVAILABLE = true`), run Test Log Analysis (common-move.md Section 13) to detect arithmetic aborts, assertion failures, and runtime anomalies. If build fails, note errors and skip.
 
-**Output a one-paragraph codebase summary** (include build status) before proceeding to Phase 2.
+**Output a one-paragraph codebase summary** (include build status) before proceeding.
 
 ---
 
 ### Phase 2 — Multi-Perspective Review
 
-Run three parallel mental models on the code:
-
 **Perspective 1 — The Attacker**
-Enumerate every entry function. For each:
+For each entry function:
 - What inputs does it accept without validation?
 - Can I pass an object I don't own?
 - Can I bypass any `assert!` by constructing a specific state?
@@ -173,7 +157,7 @@ Enumerate every entry function. For each:
 - Are there flash loan vectors?
 - Can object references be reused or replayed across transactions?
 
-**Perspective 4 — The Symmetry Checker (from Trail of Bits methodology)**
+**Perspective 4 — The Symmetry Checker**
 For every pair of inverse operations, verify symmetry:
 - deposit/withdraw: `withdraw(deposit(X)) <= X` always (rounding favors protocol)
 - borrow/repay: `repay(borrow(X)) >= X` always (rounding favors protocol)
@@ -197,7 +181,7 @@ Work through every check in `common-move.md`, then the chain-specific reference.
 2. If found: record location, describe impact, assign severity
 3. If clean: note it as verified
 
-**Fixed-point helper inspection (mandatory):** For every module that uses a fixed-point math library (`float`, `decimal`, `wad_ray`, `fixed_point32/64`, or any custom `Decimal`/`WAD` wrapper), **open the helper source code** and derive the internal overflow bounds for `mul`, `div`, `from`, `floor`, `ceil`. Do not trust that the calling code is safe just because it reads `A.mul(B).div(C)` — the intermediate `A.mul(B)` may overflow inside the helper before `.div(C)` executes. See common-move.md 2.6, DEFI-85, DEFI-86.
+**Fixed-point helper inspection (mandatory):** For every fixed-point library used (`float`, `decimal`, `wad_ray`, `fixed_point32/64`, custom wrappers), **open the helper source** and derive overflow bounds for `mul`, `div`, `from`. The intermediate `A.mul(B)` may overflow before `.div(C)` executes. See common-move.md 2.6, DEFI-85, DEFI-86.
 
 **Do not skip checks.** A clean check is still a check — mark it ✅.
 
@@ -227,24 +211,9 @@ If the protocol involves tokens, swaps, lending, staking, or oracles:
 
 ### Phase 5 — Semantic Gap & Stale-State Scan
 
-If the protocol contains:
+If the protocol has multiple accounting variables, reward indices/accumulators, checkpoints, or lending state across modules — read `semantic-gap-checks.md` and run this phase. Mandatory for lending, staking, vault, reward, liquidation, and oracle-heavy protocols.
 
-- multiple accounting variables for one concept
-- reward indices or accumulators
-- checkpoints, snapshots, or `last_update_*` fields
-- lending state spread across multiple modules
-- liquidation, emode, reserve, or rewards modules
-
-then read `semantic-gap-checks.md` and run this phase before cross-module interaction review.
-
-Required outputs:
-
-- writer path
-- stale or mismatched consumer path
-- persistence window
-- numeric trace for any High/Critical candidate
-
-This phase is mandatory for lending, staking, vault, reward, liquidation, and oracle-heavy protocols.
+Required outputs: writer path, stale/mismatched consumer path, persistence window, numeric trace for any High/Critical candidate.
 
 ---
 
@@ -315,7 +284,8 @@ Before reporting, every candidate finding from Phases 3-6 must survive a Move-ex
 verification pass. This phase eliminates false positives, corrects inflated severities,
 and ensures only real, exploitable findings reach the report.
 
-Before verifying any finding, read `verification-policy.md` and apply:
+Before verifying any finding, read `verification-policy.md`, `evidence-chains.md`,
+and `confidence-gates.md`. Apply:
 
 - evidence source tagging
 - the mock rejection rule
@@ -400,10 +370,10 @@ Systematically challenge each finding against Move's unique properties:
 
 **Step 3 — Label Each Finding**
 
-- **VALID** — Survives all checks. Exploitable on mainnet. Include at stated severity.
-- **QUESTIONABLE** — Plausible, but decisive proof is missing or the dismissal depends on weak evidence.
+- **VALID** — Survives all checks. Exploitable on mainnet. Include at stated severity. Assign confidence: `confirmed` or `likely`.
+- **QUESTIONABLE** — Plausible, but decisive proof is missing. Confidence: `needs_review`. Max severity: Medium.
 - **DISMISSED** — Disproven by trusted local evidence (`[CODE]`, `[TEST]`, `[PROD-SOURCE]`, `[PROD-STATE]`).
-- **OVERCLASSIFIED** — Real issue, severity inflated. Downgrade with reasoning.
+- **OVERCLASSIFIED** — Real issue, severity inflated. Downgrade with reasoning. Re-assign confidence level.
 
 **Step 4 — Mandatory Kill Questions**
 
@@ -423,6 +393,9 @@ is "no" or uncertain, downgrade or dismiss:
    known-good design. Explain why THIS protocol's context differs if reporting.
 5. **Who loses money, how much, and under what conditions?**
    If you can't name a specific dollar impact and a specific victim → downgrade severity.
+6. **Am I hallucinating this vulnerability?** Re-read the ACTUAL source code now.
+   Does the code I'm referencing exist? Can I name exact file:line? Run the
+   Self-Hallucination Check in `move-fp-catalog.md` Section 3. If any check fails → INVALID.
 
 **Step 5 — Root-Cause Deduplication**
 
@@ -461,7 +434,7 @@ Produce a structured audit report in this exact format:
 | Field      | Value |
 |------------|-------|
 | Severity   | Critical / High / Medium / Low / Info |
-| Confidence | VALID / QUESTIONABLE |
+| Confidence | VALID (`confirmed`/`likely`) / QUESTIONABLE (`needs_review`) |
 | Location   | module_name.move, line N, function name |
 | Category   | [Access Control / Arithmetic / Resource Safety / etc.] |
 
@@ -512,20 +485,6 @@ test coverage gaps, centralization risks, upgrade risks.
 **Likelihood × Impact = Severity.** A theoretically catastrophic bug that requires a nation-state adversary is not Critical. A low-impact bug that's trivially exploitable is Medium, not Low.
 
 **Admin-origin latent user DoS:** Never dismiss a bug as "admin-only" or "trusted setup" if the admin action is routine (e.g., adding a reward program, setting a fee rate) and unprivileged users or liquidators are later bricked. Severity is based on who is blocked and what is blocked (fund lock, liquidation failure), not on who created the initial configuration. See common-move.md 12.2.
-
----
-
-## Known False Positive Patterns — Do NOT Report Unless Evidence of Actual Harm
-
-Before filing a finding, check if it matches these patterns that APPEAR vulnerable but are commonly intentional:
-
-1. **Flash loan not updating accounting fields (cash, debt):** Hot potato guarantees same-tx repayment. Decrementing cash would understate reserves during the loan window. See DESIGN-L2.
-2. **EMA for liquidation eligibility, Spot for seize calculation:** Liquidator sells collateral at spot market price. Using EMA for seize would make liquidation unprofitable during rapid price drops. See DESIGN-L1.
-3. **Blocking borrows when idle cash < cash_reserve:** Protective behavior — ensures protocol fees are not lent out. Resolves naturally as loans are repaid.
-4. **Liquidation skipping rate limiters:** Liquidations must proceed regardless of rate limits to maintain protocol solvency. Check if this is documented in code comments.
-5. **Interest rate returning 0 at very low utilization:** Expected behavior from fixed-point truncation. Only flag if it enables economically significant free borrowing.
-
-If you encounter one of these, you MUST explain why it is harmful DESPITE the design rationale before including it in the report. Otherwise, downgrade to Informational or omit.
 
 ---
 

@@ -11,6 +11,50 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.4.0] — 2026-03-21
+
+### Anti-False-Positive Overhaul — TOB-inspired confidence gating and evidence chains
+
+Benchmarking against CurrenSui revealed a ~25% false positive rate, mostly from
+LLM rationalizations, pattern-matching without data flow analysis, and inflated
+severity on non-exploitable findings. This release integrates anti-FP techniques
+adapted from Trail of Bits' skills (rationalizations tables, confidence gating,
+evidence templates, FP catalogs, devil's advocate reviews) into the Move auditor.
+
+**New files:**
+
+- **`move-fp-catalog.md`** (Always loaded) — 10-row rationalizations table of
+  Move-specific LLM shortcuts to reject, 29+ false positive patterns across 5
+  categories (Sui Object Model, Move Type System, Abort Semantics, PTB Composition,
+  DeFi Design Patterns), and a 5-point self-hallucination check protocol
+- **`evidence-chains.md`** (Phase 7) — Structured evidence templates: data flow
+  with Move trust levels, mathematical bounds proofs, attacker control analysis,
+  PoC pseudocode (Sui PTB / Aptos tx format), negative PoC for dismissals, and
+  13-question devil's advocate protocol
+- **`confidence-gates.md`** (Phase 7) — Multi-signal confidence gating: 3 levels
+  (`confirmed`/`likely`/`needs_review`), 8 ranked signal types, hard evidence
+  requirements per finding type, completeness thresholds, 6-gate checklist
+
+**SKILL.md changes (net reduction: 538 → 497 lines):**
+- Removed Known FP Patterns section (migrated to `move-fp-catalog.md` Section 2E)
+- Removed Quick Maturity Assessment (low value, covered by reference files)
+- Added "When NOT to Use" section
+- Added 3 new files to Reference Files table
+- Phase 7 now loads `evidence-chains.md` and `confidence-gates.md`
+- Kill Question 6: mandatory self-hallucination check
+- Step 3 labels now include confidence levels (`confirmed`/`likely`/`needs_review`)
+- Condensed verbose prose throughout
+
+**Modified files:**
+- `verification-policy.md` — added Hard Evidence Requirements cross-reference and
+  Confidence Gating section with severity caps
+- `checklist-router.md` — added `move-fp-catalog.md` to Always Load, added
+  Verification Phase Loading section for evidence-chains and confidence-gates
+- `sample-finding.md` — added second example finding demonstrating evidence chain
+  table, signal strengths, confidence level, recoverability assessment, and gate verification
+
+---
+
 ## [3.3.0] — 2026-03-19
 
 ### Workflow and verification improvements

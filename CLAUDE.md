@@ -25,7 +25,11 @@ The skill lives in `move-auditor/` and is installed by copying that directory to
    - `defi-auction-clm.md` (DEFI-67–73), `defi-signatures.md` (DEFI-74–79)
    - `defi-lending-design-patterns.md` (DESIGN-L1–L4, known-good patterns)
    - Next available ID: **DEFI-87**
-6. **New reference files** (e.g., a vulnerability database) go in `move-auditor/`
+6. **Anti-FP / verification files** are at top-level:
+   - `move-fp-catalog.md` — Always loaded; FP patterns and rationalizations to reject
+   - `evidence-chains.md` — Phase 7; structured evidence templates
+   - `confidence-gates.md` — Phase 7; confidence gating and hard evidence requirements
+7. **New reference files** (e.g., a vulnerability database) go in `move-auditor/`
    and must be referenced from `SKILL.md` with a load instruction
 
 ---

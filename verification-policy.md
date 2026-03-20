@@ -114,3 +114,23 @@ For each finding that survives triage, include:
 - `math_bounds=pass/fail`
 - final label: `VALID`, `QUESTIONABLE`, `DISMISSED`, or `OVERCLASSIFIED`
 - severity rationale
+
+---
+
+## Hard Evidence Requirements
+
+For finding-type-specific evidence requirements, see `confidence-gates.md` Section 3.
+A finding missing its required hard evidence is automatically capped at `needs_review`
+confidence regardless of other signals.
+
+## Confidence Gating
+
+Findings are assigned a confidence level that constrains maximum severity:
+
+| Confidence | Requirement | Max Severity |
+|-----------|-------------|-------------|
+| `confirmed` | 2+ independent corroborating signals | Critical / High / Medium / Low |
+| `likely` | 1 strong signal (strength ≥ 3) | High (if signal is strong) / Medium / Low |
+| `needs_review` | Pattern match only, no concrete corroboration | **Medium max** |
+
+See `confidence-gates.md` for the full signal taxonomy and gating checklist.

@@ -22,6 +22,14 @@ Produce a short plan:
 - `common-move.md`
 - `verification-policy.md`
 - `checklist-router.md`
+- `move-fp-catalog.md`
+
+## Verification Phase Loading
+
+Load these files when entering Phase 7 — Verify & Triage:
+
+- `evidence-chains.md` — structured evidence templates for data flow, math proofs, PoC
+- `confidence-gates.md` — confidence gating, hard evidence requirements per finding type
 
 ## Chain Routing
 
