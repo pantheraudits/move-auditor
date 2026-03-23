@@ -923,6 +923,48 @@ public fun liquidate(market: &mut Market, obligation_id: ID, repay_amount: u64) 
 
 ---
 
+## SUI-29 — Time-Lock Window State Guarantees
+
+**Description:** Delayed/time-locked transfer wrappers where the observation window does not guarantee state immutability or binding commitment. Two distinct sub-patterns:
+
+**A) Mutation during delay window:**
+The wrapper owner can `borrow_mut` and modify the inner object while a transfer is pending. The new owner receives a different object than what was visible when the transfer was scheduled.
+
+```move
+// INFORMATIONAL — owner can mutate inner object during pending transfer
+public fun borrow_mut<T: key + store>(self: &mut DelayedWrapper<T>): &mut T {
+    // No check whether a transfer is pending — owner can change inner state
+    &mut self.obj
+}
+
+// SAFER — restrict mutation during active transfer
+public fun borrow_mut<T: key + store>(self: &mut DelayedWrapper<T>): &mut T {
+    assert!(!self.transfer_pending, EMutationDuringTransfer);
+    &mut self.obj
+}
+```
+
+**B) Cancellation after deadline:**
+The owner can `cancel_schedule` even after the delay has fully elapsed, as long as `execute_transfer` hasn't been called. The delay provides observation time but not a binding commitment — observers cannot rely on the transfer completing.
+
+```move
+// INFORMATIONAL — cancel works even after deadline passed
+public fun cancel_schedule<T: key + store>(self: &mut DelayedWrapper<T>) {
+    // No check: clock::timestamp_ms(clock) < self.deadline
+    self.transfer_pending = false;
+    self.new_owner = @0x0;
+}
+```
+
+**Check:**
+1. Does the delay wrapper allow mutable access to the inner object during a pending transfer/unwrap? If yes, flag as Informational
+2. Can a scheduled operation be cancelled after the deadline passes? If yes, flag as Informational — the delay is observation-only
+3. Check if this behavior is documented — if documented, keep at Info; if not, upgrade to Low
+
+**Severity guidance:** Both patterns are often intentional design choices (owner retains full custody until transfer executes). Do NOT classify above Low unless there is no documentation and downstream protocols depend on the commitment guarantee.
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -953,3 +995,4 @@ public fun liquidate(market: &mut Market, obligation_id: ID, repay_amount: u64) 
 - [ ] `KioskOwnerCap` stored securely; `TransferPolicy` rules enforced on every extraction (SUI-26)
 - [ ] `UpgradeCap` held by governance with minimum-required policy; premature immutability flagged (SUI-27)
 - [ ] Per-call numeric limits (close factor, rate limits, cooldowns) enforced per-TRANSACTION not per-call — PTB repeated call bypass (SUI-28)
+- [ ] Time-lock wrappers: check if inner object mutable during pending transfer, and if cancel works after deadline (SUI-29)

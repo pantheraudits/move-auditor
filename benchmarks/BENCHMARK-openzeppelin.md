@@ -185,3 +185,5 @@ The OpenZeppelin Contracts for Sui library is production-quality code:
 ---
 
 *All findings manually verified against source at commit `7cfc07c`. Ground truth established through independent code review.*
+
+> **Note:** This benchmark may not be 100% accurate. If you spot any mistakes, have questions, or believe something is incorrect, please reach out on X ([@thepantherplus](https://x.com/thepantherplus)) so it can be corrected.

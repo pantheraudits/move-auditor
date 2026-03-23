@@ -30,3 +30,5 @@ Comparative benchmarks measuring `move-auditor` against other AI audit tools on 
 - **OpenZeppelin** — Can the tool accurately assess a hardened library without hallucinating bugs? Tests false positive discipline and severity calibration on production-quality code.
 
 Together they measure both **recall** (finding real bugs) and **precision** (not inventing fake ones).
+
+> **Note:** These benchmarks may not be 100% accurate. If you spot any mistakes, have questions, or believe something is incorrect, please reach out on X ([@thepantherplus](https://x.com/thepantherplus)) so it can be corrected.

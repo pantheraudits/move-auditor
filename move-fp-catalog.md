@@ -86,6 +86,23 @@ them unless you have concrete evidence of ACTUAL harm despite the protection.
 | 7 | Interest rate kink/jump model behavior | Steep rate increase above optimal utilization is intentional — it incentivizes repayment | When the kink parameters create discontinuities that can be gamed |
 | 8 | Admin parameter setting as sole finding | Admin actions are trusted unless admin is untrusted by design | When admin action is routine AND unprivileged users are later bricked (see common-move.md 12.2) |
 
+### 2F. Documented Design Constraints Are Not Medium+ Findings
+
+| # | Pattern that looks vulnerable | Why it's safe | When it IS a real bug |
+|---|------------------------------|---------------|----------------------|
+| 1 | Code behavior has explicit security warnings in code comments | The code is working as designed and documented — the developer already considered and accepted this trade-off | When there is NO structural mitigation and the footgun is easy to trigger unintentionally |
+| 2 | Wrapper lacks `store` ability (prevents shared-object embedding) | Structural mitigation at the type level — integrators cannot misuse it even if they ignore docs | Never — if the type system prevents the misuse, documenting it is defense-in-depth |
+| 3 | Multiple inline warnings (e.g., 3+ comments) about a known limitation | Developer has explicitly warned integrators; triggering requires intentionally ignoring documentation | When the docs warn but the API makes the dangerous path the easiest/default one |
+
+**Rule:** If a behavior is:
+1. Documented with explicit security warnings in code comments (not just README), AND
+2. Has structural mitigations (e.g., no `store` ability, no public constructor for dangerous state), AND
+3. Requires the integrator to intentionally ignore documentation to trigger
+
+Then the maximum severity is **Informational**. The code is working as designed and documented.
+
+**Counter-example:** If the documentation warns but there is NO structural mitigation and the footgun is easy to trigger, Low may be appropriate.
+
 ---
 
 ## Section 3: Self-Hallucination Check Protocol

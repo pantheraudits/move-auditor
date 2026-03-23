@@ -167,6 +167,12 @@ For every pair of inverse operations, verify symmetry:
 - admin update: only config changes, runtime state preserved
 For each pair, check: (a) rounding direction, (b) state consistency, (c) oracle consistency, (d) access control symmetry
 
+**Perspective 5 — The Consistency Checker**
+When a module uses an explicit safety pattern (e.g., `EDivideByZero` guard before division, bounds check on construction params, `assert!(amount > 0)` on inputs), check if sibling modules in the same package follow the same pattern. Inconsistencies are Low.
+- Grep for the pattern across all modules in the package
+- If Module A guards division with an explicit zero-check but Module B performing the same operation does not → flag the inconsistency
+- Also applies to: error code usage, input validation, capability checks, event emission
+
 ---
 
 ### Phase 3 — Structured Vulnerability Scan

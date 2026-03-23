@@ -114,7 +114,7 @@ AI-assisted audit output **must be manually verified**. This skill accelerates y
 - [ ] Automated grep patterns for common Move anti-patterns
 - [ ] Machine-readable audit artifacts (`coverage-plan`, validated findings, structured clean checks)
 - [ ] Report templates for private audits vs. contest submissions
-- [ ] Benchmarking the skill against baseline prompts and manual review to see where it actually makes a difference 
+- [x] Benchmarking the skill against baseline prompts and manual review to see where it actually makes a difference 
 
 ## Contributing
 

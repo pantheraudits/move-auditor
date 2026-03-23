@@ -49,6 +49,11 @@ struct AdminCap has drop {}
 **Risk:** Typo in address permanently locks the protocol.
 **Check:** Critical ownership transfers should use a pending → accept pattern.
 
+### 1.5 API Naming Consistency (Misleading Conversion Functions)
+**Pattern:** `into_X` / `from_X` conversion functions that don't actually perform conversion — they're raw wrappers that just reinterpret the value without scaling, type conversion, or validation.
+**Risk:** Integrators assume the function performs real conversion (e.g., `into_UD30x9` implies scaling to 30-digit-9-decimal fixed-point), but it's just a struct wrap. Downstream math is silently wrong.
+**Check:** For every `into_*` / `from_*` / `to_*` function, verify the function body matches what the name implies. Misleading names are Low/Informational.
+
 ---
 
 ## 2. Arithmetic & Overflow
@@ -135,6 +140,40 @@ let shifted = value << amount;
 2. For each left shift: can the shift amount exceed the bit width? Can high bits be lost?
 3. For each right shift: is precision loss acceptable?
 4. Especially dangerous in fee calculations, fixed-point math, and bitmap/flag manipulation
+
+### 2.7 Delayed Overflow via Immutable Construction Parameters
+
+**Pattern:** A struct field is set at construction time (e.g., `wrap`, `new`, `init`) and never validated for upper bounds. Later, the field is combined with a runtime value (e.g., `clock::timestamp_ms() + self.delay`) in arithmetic that can overflow `u64`.
+
+**Risk:** Since Move uses checked arithmetic (abort, not wrap), the overflow permanently bricks the function. If the field is immutable (no setter, no admin rescue), the object is permanently locked with no recovery path. This is distinct from 2.6 (library-internal overflow) — here the overflow is in application-level arithmetic between a stored param and a runtime value.
+
+```move
+// VULNERABLE — no upper bound on delay, permanently locks object if near u64::MAX
+public fun wrap<T: key + store>(obj: T, min_delay_ms: u64, ctx: &mut TxContext): DelayedWrapper<T> {
+    // min_delay_ms stored as-is, no validation
+    DelayedWrapper { id: object::new(ctx), obj, min_delay_ms }
+}
+
+public fun schedule<T: key + store>(self: &mut DelayedWrapper<T>, clock: &Clock) {
+    let deadline = clock::timestamp_ms(clock) + self.min_delay_ms; // overflows → abort forever
+    self.deadline = deadline;
+}
+
+// SAFE — bounded at construction
+const MAX_DELAY_MS: u64 = 365 * 24 * 60 * 60 * 1000; // 1 year
+
+public fun wrap<T: key + store>(obj: T, min_delay_ms: u64, ctx: &mut TxContext): DelayedWrapper<T> {
+    assert!(min_delay_ms <= MAX_DELAY_MS, ETooLong);
+    DelayedWrapper { id: object::new(ctx), obj, min_delay_ms }
+}
+```
+
+**Check:**
+1. Find all struct fields set at construction/`wrap`/`new` time with no upper-bound validation
+2. Trace each field to where it's used in arithmetic with runtime values (`clock`, `epoch`, counters)
+3. If `immutable_field + clock::timestamp_ms()` can overflow `u64`, flag it
+4. Verify a recovery path exists (unwrap, admin rescue, timeout fallback)
+5. Also check: missing public accessors for construction parameters — downstream protocols cannot programmatically validate the configured value
 
 ---
 

@@ -83,3 +83,5 @@
 ---
 
 *All findings manually verified against source at commit `dc2975d`.*
+
+> **Note:** This benchmark may not be 100% accurate. If you spot any mistakes, have questions, or believe something is incorrect, please reach out on X ([@thepantherplus](https://x.com/thepantherplus)) so it can be corrected.
