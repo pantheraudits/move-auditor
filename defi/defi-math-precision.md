@@ -410,6 +410,62 @@ public fun update_pool_reward(pool: &mut Pool, clock: &Clock) {
 
 ---
 
+## DEFI-87 — Reward Manager Overflow Auto-Detection
+
+**Trigger:** Any codebase containing reward distribution, liquidity mining, or incentive mechanisms with time-based unlocking.
+
+**Pattern:** A reward manager computes unlocked rewards as `(total_rewards * time_elapsed) / duration` using a fixed-point helper. The multiply-before-divide order inside the helper causes overflow when `total_rewards * time_elapsed > VALUE_MAX`. If this computation runs inside a periodic update that gates ALL pool operations, overflow = permanent pool freeze.
+
+**Mandatory grep patterns — run ALL of these:**
+```
+total_rewards.*mul.*time
+time_passed.*mul.*total
+unlocked.*from.*mul.*from.*div
+reward.*\.mul\(.*time
+update_pool_reward
+update_reward_manager
+update_obligation_reward
+liquidity_mining.*update
+```
+
+**For every match, execute this 5-step trace:**
+
+1. **Read the helper:** Open the fixed-point module used (e.g., `float.move`, `decimal.move`). Read `mul()`. Derive: what is the max product before abort?
+2. **Compute overflow threshold:**
+   ```
+   For mul(from(A), from(B)) where helper bound is A * B <= U64_MAX:
+
+   | Token     | Decimals | Reward Amount    | Atomic Units | Max time_passed before overflow |
+   |-----------|----------|------------------|--------------|-------------------------------|
+   | USDC      | 6        | 10,000           | 1e10         | ~21.3 days                    |
+   | USDC      | 6        | 100,000          | 1e11         | ~2.13 days                    |
+   | USDC      | 6        | 500,000          | 5e11         | ~10.25 hours                  |
+   | USDC      | 6        | 1,000,000        | 1e12         | ~5.12 hours                   |
+   | SUI       | 9        | 1,000            | 1e12         | ~5.12 hours                   |
+   | SUI       | 9        | 10,000           | 1e13         | ~30.7 minutes                 |
+   ```
+   If ANY realistic reward configuration overflows within 30 days of inactivity → flag.
+
+3. **Check checkpoint ordering:** Is `last_update_time_ms` (or equivalent) written AFTER the overflowing line? If yes → permanent deadlock.
+
+4. **Trace all callers:** Does EVERY user-facing operation (deposit, withdraw, borrow, repay, liquidate, claim) call this update? Does EVERY admin recovery path (cancel_reward, close_pool) also call this update? If ALL paths trapped → no recovery → HIGH/CRITICAL.
+
+5. **Check for admin-origin:** Is the overflow triggered by a routine admin action (adding rewards)? If the admin action is expected/routine but users are the victims → do NOT dismiss as "admin-only" (see 12.2).
+
+**Safe patterns (do NOT flag):**
+```move
+// SAFE — divide first, then multiply
+float::from(total_rewards).div(float::from(duration)).mul(float::from(time_passed))
+
+// SAFE — cap time_passed to remaining duration
+let time_passed = math::min(time_passed, end_time - last_update_time);
+
+// SAFE — u256 intermediate with sufficient headroom
+let unlocked = ((total_rewards as u256) * (time_passed as u256)) / (duration as u256);
+```
+
+---
+
 ## Math / Precision Verification Checklist
 
 - [ ] All financial calculations multiply before dividing (DEFI-35)
@@ -423,3 +479,4 @@ public fun update_pool_reward(pool: &mut Pool, clock: &Clock) {
 - [ ] Fixed-point helper `mul` intermediate product cannot overflow before normalizing division (DEFI-85)
 - [ ] Every accumulator checkpoint is written BEFORE or ATOMICALLY WITH potentially-aborting arithmetic (DEFI-86)
 - [ ] Overflow thresholds computed with production token decimals and realistic amounts for all `from(A).mul(from(B))` calls (DEFI-85)
+- [ ] Reward manager overflow: grep patterns run, threshold table computed, checkpoint ordering checked, all callers traced (DEFI-87)

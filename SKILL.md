@@ -61,7 +61,7 @@ file in this skill's directory (e.g., if SKILL.md is at
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`) — DEFI-11 to DEFI-16 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
 | `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
-| `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, fee/share math) — DEFI-35 to DEFI-42 |
+| `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, `float`, `Decimal`, `WAD`, fee/share math) OR when reward/accumulator/liquidity_mining patterns detected — DEFI-35 to DEFI-42, DEFI-85 to DEFI-87 |
 | `defi/defi-slippage.md` | When swap/DEX patterns detected (`swap`, `min_amount_out`, `slippage`, AMM pool) — DEFI-43 to DEFI-49 |
 | `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81, DEFI-83 |
 | `defi/defi-auction-clm.md` | When auction or CLM patterns detected (`bid`, `auction`, `TWAP`, `tick`, `concentrated`) — DEFI-67 to DEFI-73 |
@@ -95,7 +95,7 @@ You are a senior Move security researcher. Find real, exploitable vulnerabilitie
   - **DeFi protocols** → also read `defi-vectors.md`, then check the subcategory detection
     table inside it and load relevant `defi/*.md` files (multiple may apply — e.g., a lending
     protocol should load `defi-lending.md`, `defi-liquidation.md`, and `defi-oracle.md`)
-  - **Accumulator / checkpoint / rewards / cross-module accounting signals** → also read `semantic-gap-checks.md`
+  - **Accumulator / checkpoint / rewards / cross-module accounting signals** (grep: `last_update`, `checkpoint`, `cumulative`, `reward_manager`, `pool_reward`, `liquidity_mining`, `accumulated`) → also read `semantic-gap-checks.md` AND `defi/defi-math-precision.md` (for DEFI-85/86/87)
 
 **Map the codebase:**
 ```
@@ -181,9 +181,20 @@ Work through every check in `common-move.md`, then the chain-specific reference.
 2. If found: record location, describe impact, assign severity
 3. If clean: note it as verified
 
-**Fixed-point helper inspection (mandatory):** For every fixed-point library used (`float`, `decimal`, `wad_ray`, `fixed_point32/64`, custom wrappers), **open the helper source** and derive overflow bounds for `mul`, `div`, `from`. The intermediate `A.mul(B)` may overflow before `.div(C)` executes. See common-move.md 2.6, DEFI-85, DEFI-86.
-
 **Do not skip checks.** A clean check is still a check — mark it ✅.
+
+**Fixed-Point Library Inspection Gate (MANDATORY — #1 missed critical bug class):**
+
+Before completing Phase 3, you MUST complete ALL steps and output confirmation:
+
+1. **Identify** all math helpers: grep for `float`, `decimal`, `wad`, `ray`, `fixed_point`, `Decimal`, `WAD`, `Float`
+2. **Read internals** of each helper's `mul`, `div`, `from` — do NOT assume from name
+3. **Derive overflow bound** for `mul(a,b)`: write the intermediate expression, simplify to raw input constraint (e.g., `A * B <= U64_MAX`)
+4. **Find all call sites** of `mul()`. For each `A.mul(B)` chain: can `A * B` exceed the bound with realistic values? (token decimals: USDC=6, SUI=9, APT=8). Compute threshold table per DEFI-85
+5. **Check checkpoint ordering** for each overflow-reachable site: abort BEFORE or AFTER checkpoint? If BEFORE → Recoverability Matrix (12.1)
+6. **Output:** "FIXED-POINT GATE: [N] helpers, [M] call sites, [K] overflow-reachable" — if K > 0, include threshold table + recoverability
+
+**Skipping this gate = missing permanent-deadlock bugs.** See 2.6, 12.1, DEFI-85–87.
 
 **Dead Code / Unreachable Branch Detection:**
 Before recording any finding that depends on a specific code branch:
@@ -223,55 +234,56 @@ After completing per-file analysis, explicitly trace these interaction pairs.
 For each pair, ask: does function A in module X leave module Y in an
 inconsistent or permanently broken state?
 
-Required pairs to check in every lending protocol audit:
+Required pairs to check in every lending protocol audit.
 
-1. **repay ↔ rewards/liquidity_mining** —
+**CHECK #1 IS HIGHEST PRIORITY — do it first, do it thoroughly:**
+
+1. **[CRITICAL PRIORITY] reward_manager_update ↔ all lending operations** —
+   Does the reward/accumulator update perform arithmetic that can abort BEFORE writing
+   `last_update_time`? If ALL user operations (deposit/withdraw/borrow/repay/liquidate/claim)
+   AND admin recovery (cancel/close) call this update → permanent deadlock.
+   (→ 12.1, DEFI-85–87). Trace: overflow bounds, checkpoint ordering, admin recovery paths, threshold table.
+
+2. **repay ↔ rewards/liquidity_mining** —
    When repay fully clears the last debt on an obligation (permissionless path),
    is the reward tracker for that obligation cleaned up?
    If not: orphaned tracker may block pool closure. (→ common-move.md 11.1)
 
-2. **liquidate ↔ reserve (collateral reserve)** —
+3. **liquidate ↔ reserve (collateral reserve)** —
    Does the liquidation path check that the collateral reserve has
    idle cash >= seize_amount before calling `balance::split()` or equivalent?
    If not: liquidation reverts at high utilization → bad debt accumulates. (→ DEFI-81)
 
-3. **adl ↔ emode** —
+4. **adl ↔ emode** —
    Does the ADL entry condition and the ADL stop condition both read total borrows
    from the same source (both reserve-level OR both emode-group-level)?
    If different sources → wrongful liquidation or stuck ADL state. (→ DEFI-82)
 
-4. **admin_config ↔ interest/reserve** —
+5. **admin_config ↔ interest/reserve** —
    Does every admin function that updates a rate model or fee rate call
    `accrue_interest()` before applying the new value?
    If not → retroactive rate application, mispriced interest for all users. (→ DEFI-80)
 
-5. **liquidate ↔ close_factor** —
+6. **liquidate ↔ close_factor** —
    Is the close factor enforced per-TRANSACTION, not per-call?
    On Sui, PTBs allow calling liquidate() N times atomically. If close factor is
    checked against current (shrinking) debt, total liquidation = 1-(1-CF)^N. (→ SUI-28, DEFI-83)
 
-6. **admin_config ↔ rate_limiters** —
+7. **admin_config ↔ rate_limiters** —
    Does the config update function preserve accumulated runtime state (limiter segments,
    accumulators, counters)?
    If config update resets limiters → sandwich attack: borrow to limit → admin resets → borrow again. (→ DEFI-84)
 
-7. **oracle_eligibility ↔ oracle_seize** —
+8. **oracle_eligibility ↔ oracle_seize** —
    Does liquidation use the same price type for both trigger and seize, OR enforce a
    bounded divergence between them?
    If borrow/withdraw enforce EMA-spot tolerance but liquidation does NOT → unbounded
    price divergence in the only operational code path during volatility. (→ DESIGN-L1 caveat)
 
-8. **flash_loan ↔ deposit/borrow/withdraw** —
+9. **flash_loan ↔ deposit/borrow/withdraw** —
    Do operations during an active flash loan see stale accounting fields (cash, total_borrows)?
    If hot potato guarantees repayment, not updating cash is intentional (DESIGN-L2). But if
    other operations READ the stale value mid-PTB, they may misprice shares or health. (→ DESIGN-L2 caveat)
-
-9. **reward_manager_update ↔ all lending operations** —
-   Does the reward/accumulator update function perform arithmetic that can abort BEFORE
-   writing `last_update_time` or equivalent checkpoint? If yes: does every user-facing
-   operation (deposit, withdraw, borrow, repay, liquidate, claim) AND every admin
-   recovery operation (cancel_reward, close_pool) call this update? If ALL paths are
-   trapped → permanent deadlock for that CoinType/pool. (→ common-move.md 12.1, DEFI-85, DEFI-86)
 
 For any interaction pair where the answer is NO → report as HIGH.
 This phase is mandatory. Do not skip it even if all per-file scans were clean.
@@ -442,33 +454,17 @@ Produce a structured audit report in this exact format:
 Clear explanation of what the vulnerability is and why it exists.
 
 **Attack Scenario (PoC):**
-Step-by-step: how an attacker exploits this using Move-specific primitives.
-1. Attacker calls `function_x<CoinType>` with crafted input Y
-2. This bypasses check Z because ...
-3. Result: attacker drains X tokens / gains unauthorized access / ...
+Step-by-step exploitation using Move-specific primitives with concrete values.
 
-**Verification:** Survived disproof dimensions [list which ones were challenged and passed].
+**Verification:** Disproof dimensions challenged and passed.
 
 **Recommended Fix:**
 Concrete code-level recommendation. Show the fix, not just the concept.
 
-**References:**
-Links or notes to similar past findings if applicable.
-
 ---
 ```
 
-After all findings, add:
-
-```
-## Verified Clean Checks
-List of checks explicitly verified and found clean, plus DISMISSED findings
-with their disproof dimension and reasoning.
-
-## Auditor Notes
-Any observations that aren't bugs but worth flagging: code quality,
-test coverage gaps, centralization risks, upgrade risks.
-```
+After all findings, add `## Verified Clean Checks` (with DISMISSED findings and reasoning) and `## Auditor Notes` (code quality, centralization, upgrade risks).
 
 ---
 
