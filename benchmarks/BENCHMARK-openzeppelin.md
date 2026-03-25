@@ -159,7 +159,7 @@ All three tools correctly identified that this is a well-engineered library with
 
 | Finding | Tool | Why Others Missed It |
 |---|---|---|
-| VF-1: div-by-zero inconsistency | `move-auditor` | Requires comparing fixed-point module against core math module's `EDivideByZero` pattern — cross-module consistency check |
+| VF-1: div-by-zero inconsistency | `move-auditor` | Requires comparing fixed-point module against core math module's `EDivideByZero` pattern — cross-module consistency check. **Submitted upstream and merged: [OpenZeppelin/contracts-sui#263](https://github.com/OpenZeppelin/contracts-sui/pull/263)** |
 | VF-6: `into_UD30x9` naming | Raw CLI | API usability concern requiring understanding of the `wrap()` vs scaling distinction |
 | VF-9: `borrow_mut` during transfer | MAIA | Requires reasoning about state visibility guarantees during delay windows |
 
@@ -181,6 +181,12 @@ The OpenZeppelin Contracts for Sui library is production-quality code:
 - Correct math across overflow/underflow/rounding edge cases
 - Healthy test-to-source ratio (~2.2:1 for test files to source files)
 - Zero exploitable vulnerabilities found by any tool
+
+---
+
+### Upstream Contribution
+
+The unique `move-auditor` find (VF-1: missing `EDivideByZero` guard) was submitted as a fix to OpenZeppelin and **merged** — [OpenZeppelin/contracts-sui#263](https://github.com/OpenZeppelin/contracts-sui/pull/263). This makes `move-auditor` a contributor to OpenZeppelin's Sui contracts.
 
 ---
 

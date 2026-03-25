@@ -101,6 +101,18 @@ Reference files are loaded **on demand** — the agent reads only what's relevan
 detected chain and protocol type, keeping the initial context window lean.
 
 
+## Real-World Impact
+
+Bugs found by `move-auditor` have been accepted and merged into production codebases:
+
+| Project | Finding | PR | Status |
+|---|---|---|---|
+| [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [#263](https://github.com/OpenZeppelin/contracts-sui/pull/263) | **Merged** |
+
+> This was a unique find from [benchmarking](benchmarks/BENCHMARK-openzeppelin.md) — no other AI audit tool (MAIA, Raw Claude CLI) caught it.
+
+---
+
 ## Disclaimer
 
 AI-assisted audit output **must be manually verified**. This skill accelerates your workflow — it does not replace deep manual review and PoC testing. All findings require human confirmation before being included in any report.
