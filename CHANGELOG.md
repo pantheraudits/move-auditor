@@ -11,6 +11,46 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.5.0] — 2026-03-27
+
+### Expanded Sui Patterns & Logic Checks — 16 new vulnerability patterns
+
+Broadens Sui-specific coverage with 13 new checks (SUI-30 to SUI-42) targeting
+object model design flaws, shared object contention, composability anti-patterns,
+and Sui framework misuse. Also adds 3 new chain-agnostic logic checks to
+`common-move.md` for subtle security bugs that static analysis misses.
+
+**common-move.md — 3 new chain-agnostic patterns:**
+- 1.6: Authorization returns bool without assertion — callers can silently discard
+  the result, bypassing access control entirely
+- 4.5: Inverted security logic — checks that block the wrong party, use the wrong
+  comparison direction, or assert the opposite of the intended condition
+- 4.6: Wrong field update — functions that modify a different same-typed field than
+  intended (compiler cannot catch field swaps between `u64` fields)
+- 3 new verification checklist items for the above
+
+**sui-patterns.md — 13 new Sui-specific patterns (SUI-30 to SUI-42):**
+- SUI-30: VecMap/VecSet for unbounded collections — O(n) DoS when user-driven growth exceeds ~1K entries
+- SUI-31: Shared object contention — excessive `&mut` on read-only paths forces consensus ordering
+- SUI-32: Blind transfer without receive logic — objects transferred to object addresses with no extraction path
+- SUI-33: `address` type where `ID` should be used — loses type safety for object references
+- SUI-34: Internal transfer instead of return — breaks PTB composability
+- SUI-35: Batch function instead of PTB loop — unnecessary complexity, vector mismatch risk
+- SUI-36: Solidity-style auth (address→role maps) instead of Move capability objects
+- SUI-37: Framework type name shadowing — user types named CoinMetadata, TreasuryCap, Publisher, etc.
+- SUI-38: Metadata/Display frozen before required fields set — irreversible
+- SUI-39: Multiple Publisher objects per package — split authority, governance complexity
+- SUI-40: Unnecessary `public(package)` visibility — attack surface expansion
+- SUI-41: NFT stores constant fields — per-collection data belongs in Display templates, not per-instance structs
+- SUI-42: Migration function in non-upgraded v1 package — dead code
+- 14 new verification checklist items for the above
+
+**SKILL.md:**
+- Updated sui-patterns.md reference range: SUI-01 to SUI-42 (was SUI-01 to SUI-28)
+- Version bumped to 3.5.0
+
+---
+
 ## [3.4.0] — 2026-03-21
 
 ### Anti-False-Positive Overhaul — TOB-inspired confidence gating and evidence chains

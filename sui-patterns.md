@@ -965,6 +965,422 @@ public fun cancel_schedule<T: key + store>(self: &mut DelayedWrapper<T>) {
 
 ---
 
+## SUI-30 — VecMap/VecSet for Unbounded Collections
+
+**Description:** `VecMap` and `VecSet` use linear scans for every lookup, insertion, and removal — O(n) per operation. When the collection size is driven by user actions (deposits, registrations, listings), an attacker can grow it until operations exceed gas limits.
+
+**Pattern:**
+```move
+// VULNERABLE — roles/balances can grow unboundedly as users are added
+public struct GlobalState has key {
+    id: UID,
+    user_roles: VecMap<address, vector<u8>>,  // O(n) on every lookup
+    user_balances: VecMap<address, u64>,       // O(n) on every deposit
+}
+
+// SAFE — Table provides O(1) lookups via dynamic fields
+public struct GlobalState has key {
+    id: UID,
+    user_roles: Table<address, vector<u8>>,
+    user_balances: Table<address, u64>,
+}
+```
+
+**Rule of thumb:** VecMap/VecSet is fine for admin-bounded collections (<100 entries, e.g., supported token list). Use `Table`/`ObjectTable` for any collection populated by user actions.
+
+**Check:**
+1. Grep for `VecMap`, `VecSet` usage in shared objects
+2. Trace who adds entries — if any public/entry function grows the collection → flag
+3. Is there a max-size cap enforced? If not → DoS at ~1,000+ entries
+4. Cross-ref: SUI-15 (unbounded iteration is a sub-problem of this)
+
+---
+
+## SUI-31 — Shared Object Contention (Excessive Mutable Access)
+
+**Description:** Shared objects that require `&mut` access for read-only or query operations. Every `&mut` reference on a shared object forces consensus ordering (sequential execution), creating a bottleneck. High-TPS protocols with `&mut` on common paths become unusable under load.
+
+**Pattern:**
+```move
+// VULNERABLE — read-only operation takes &mut, forces consensus ordering
+public fun check_balance<T>(state: &mut GlobalState<T>, addr: address): u64 {
+    *table::borrow(&state.balances, addr)
+}
+
+// VULNERABLE — emitting an event doesn't need &mut
+public fun get_price(oracle: &mut Oracle): u64 {
+    event::emit(PriceQueried { price: oracle.price });
+    oracle.price
+}
+
+// SAFE — immutable reference allows parallel execution
+public fun check_balance<T>(state: &GlobalState<T>, addr: address): u64 {
+    *table::borrow(&state.balances, addr)
+}
+
+public fun get_price(oracle: &Oracle): u64 {
+    oracle.price
+}
+```
+
+**Check:**
+1. For each shared object, count `&mut` vs `&` references across all public functions
+2. If the `&mut:&` ratio exceeds 2:1 in non-admin functions → flag as design concern
+3. Functions that only read state but take `&mut` → flag (should use `&`)
+4. High-TPS paths (swaps, price queries, balance checks) must use `&` wherever possible
+
+---
+
+## SUI-32 — Blind Transfer Without Receive Logic
+
+**Description:** `transfer::transfer` sends an object to another object's address (via `to_address()`), but the target type has no `receive` function. The transferred object becomes permanently inaccessible — it exists on-chain but cannot be extracted.
+
+**Pattern:**
+```move
+// VULNERABLE — sends reward to a GameCharacter object, but GameCharacter has no receive fn
+public fun send_reward(character_id: ID, reward: Reward) {
+    transfer::transfer(reward, character_id.to_address());
+    // reward is now stuck — GameCharacter has no way to receive it
+}
+
+// SAFE — target type implements receive logic
+public fun send_reward(character_id: ID, reward: Reward) {
+    transfer::transfer(reward, character_id.to_address());
+}
+
+// In the GameCharacter module:
+public fun receive_reward(
+    character: &mut GameCharacter,
+    reward: Receiving<Reward>
+): Reward {
+    transfer::receive(&mut character.id, reward)
+}
+```
+
+**Check:**
+1. Grep for `transfer::transfer` or `transfer::public_transfer` where the recipient is `*.to_address()` or `object::id_to_address()`
+2. For each such transfer: does the target type's module have a corresponding `transfer::receive` function?
+3. If no receive function exists → flag as High (permanent fund/object loss)
+4. Also check: does the receive function have appropriate access control?
+
+---
+
+## SUI-33 — Using `address` Type Where `ID` Should Be Used
+
+**Description:** Struct fields that store object references as `address` instead of `ID`. The `address` type provides no compile-time safety that the value actually refers to an object, allows mixing up user addresses with object IDs, and loses the ability to use `object::id`-based comparisons.
+
+**Pattern:**
+```move
+// VULNERABLE — pool_ref is address, could be a user address or garbage
+public struct Position has key {
+    id: UID,
+    pool_ref: address,       // is this an object ID or a user address?
+    collateral_ref: address, // same ambiguity
+    owner: address,          // this one IS a user address
+}
+
+// SAFE — ID type enforces this is an object reference
+public struct Position has key {
+    id: UID,
+    pool_id: ID,          // clearly an object reference
+    collateral_id: ID,    // clearly an object reference
+    owner: address,       // clearly a user address
+}
+```
+
+**Check:**
+1. Grep for `address` fields in structs where the field name contains `id`, `object`, `pool`, `nft`, `cap`, `registry`, `vault`
+2. If the field is used with `object::id_to_address()` or compared against object IDs → should be `ID` type
+3. Exception: fields that genuinely store user/sender addresses (owner, recipient, admin) should remain `address`
+
+---
+
+## SUI-34 — Internal Transfer Instead of Returning Object
+
+**Description:** Functions that create an object and immediately `transfer::transfer` or `transfer::share_object` it internally, instead of returning the object. This prevents callers from composing the result in PTBs.
+
+**Pattern:**
+```move
+// VULNERABLE — not composable, caller cannot use the Movie in the same PTB
+public fun create_movie(_: &AdminCap, title: String, ctx: &mut TxContext) {
+    let movie = Movie { id: object::new(ctx), title };
+    transfer::share_object(movie);  // locked inside the function
+}
+
+// SAFE — return the object, let the caller decide what to do with it
+public fun create_movie(_: &AdminCap, title: String, ctx: &mut TxContext): Movie {
+    Movie { id: object::new(ctx), title }
+}
+
+// Caller composes in PTB:
+// let movie = create_movie(cap, title);
+// add_metadata(movie, ...);
+// transfer::share_object(movie);
+```
+
+**Check:**
+1. Grep for `transfer::transfer`, `transfer::public_transfer`, `transfer::share_object` inside non-`init` functions
+2. If the transferred object was created in the same function → flag (should return instead)
+3. Exception: `init()` functions are expected to transfer/share objects directly
+4. Exception: Functions where the transfer IS the core purpose (e.g., `send_to_recipient`)
+
+---
+
+## SUI-35 — Batch Function Instead of PTB Loop
+
+**Description:** Functions that accept parallel vectors (`amounts: vector<u64>, recipients: vector<address>`) for batch processing. On Sui, PTBs natively handle batching — callers can call a single-item function N times in one PTB. Batch functions add code complexity, vector length mismatch risks, and gas estimation difficulties.
+
+**Pattern:**
+```move
+// ANTI-PATTERN — custom batch logic with parallel vectors
+public fun mint_batch(
+    cap: &MintCap,
+    amounts: vector<u64>,
+    recipients: vector<address>,
+    ctx: &mut TxContext
+) {
+    let len = vector::length(&amounts);
+    assert!(len == vector::length(&recipients), EMismatch);
+    let mut i = 0;
+    while (i < len) {
+        let coin = coin::mint(cap, *vector::borrow(&amounts, i), ctx);
+        transfer::public_transfer(coin, *vector::borrow(&recipients, i));
+        i = i + 1;
+    }
+}
+
+// PREFERRED — single-item function, caller uses PTB for batching
+public fun mint_one(
+    cap: &MintCap,
+    amount: u64,
+    recipient: address,
+    ctx: &mut TxContext
+) {
+    let coin = coin::mint(cap, amount, ctx);
+    transfer::public_transfer(coin, recipient);
+}
+// PTB: call mint_one N times with different args — same atomicity guarantee
+```
+
+**Check:**
+1. Flag functions accepting parallel vectors (`vector<u64>` + `vector<address>`) with internal loops
+2. Suggest refactoring to single-item function that callers invoke via PTB
+3. Exception: operations where atomicity across all items is required (all-or-nothing batch)
+4. Severity: Low (design/composability issue, not a direct vulnerability)
+
+---
+
+## SUI-36 — Solidity-Style Auth Patterns Instead of Capabilities
+
+**Description:** Using `VecMap<address, role>` or similar address-based role mappings for access control instead of Move's native capability objects. This is a Solidity anti-pattern transplanted into Move — it's less secure (relies on address comparison), creates unbounded storage (VecMap grows), and misses Move's type-level access control guarantees.
+
+**Pattern:**
+```move
+// ANTI-PATTERN — Solidity-style role mapping
+public struct GlobalCap<phantom T> has key {
+    id: UID,
+    roles: VecMap<address, vector<u8>>,  // address → role bytes
+}
+
+public fun check_role<T>(cap: &GlobalCap<T>, addr: address, role: vector<u8>): bool {
+    let r = vec_map::get(&cap.roles, &addr);
+    *r == role
+}
+
+// PREFERRED — Move capability pattern
+public struct OperatorCap has key, store { id: UID }
+public struct AdminCap has key { id: UID }
+
+public fun operate(_: &OperatorCap, state: &mut State) { /* ... */ }
+public fun admin_action(_: &AdminCap, state: &mut State) { /* ... */ }
+```
+
+**Check:**
+1. Flag structs with `VecMap<address, ...>` or `Table<address, ...>` fields used for role/permission tracking
+2. The Move capability pattern (distinct struct per role, pass by reference) is strictly superior:
+   - Type-safe (compiler enforces correct cap type)
+   - O(1) (no map lookup)
+   - Cannot be forged (no `copy` ability)
+   - Revocable (delete the cap object)
+3. Severity: Medium (security anti-pattern) if the role map is the primary auth mechanism; Low if supplementary
+
+---
+
+## SUI-37 — Framework Type Name Shadowing
+
+**Description:** Defining types with names that shadow well-known Sui framework types: `CoinMetadata`, `TreasuryCap`, `Publisher`, `Display`, `TransferPolicy`, `Kiosk`, `UpgradeCap`. Integrators or downstream code may reference the wrong type.
+
+**Pattern:**
+```move
+// DANGEROUS — shadows sui::coin::TreasuryCap
+public struct TreasuryCap has key {
+    id: UID,
+    supply: u64,
+}
+
+// DANGEROUS — shadows sui::coin::CoinMetadata
+public struct CoinMetadata has key {
+    id: UID,
+    name: String,
+}
+
+// SAFE — use distinct names
+public struct TokenTreasury has key {
+    id: UID,
+    supply: u64,
+}
+```
+
+**Check:**
+1. Grep for struct names matching: `CoinMetadata`, `TreasuryCap`, `Publisher`, `Display`, `TransferPolicy`, `Kiosk`, `KioskOwnerCap`, `UpgradeCap`
+2. If any of these are defined in user code (not imported from `sui::*`) → flag
+3. Severity: Medium if the shadowing causes functional confusion; Low otherwise
+
+---
+
+## SUI-38 — Metadata/Display Frozen Before Required Fields Set
+
+**Description:** Calling `transfer::public_freeze_object` on a `Display` or metadata object before all required fields (especially `icon_url`, `image_url`, `project_url`) are set. Once frozen, the object is permanently immutable — missing fields cannot be added.
+
+**Pattern:**
+```move
+// VULNERABLE — freezes Display before setting icon_url
+fun init(otw: MY_NFT, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    let mut display = display::new<MyNFT>(&publisher, ctx);
+    display::add(&mut display, string::utf8(b"name"), string::utf8(b"{name}"));
+    display::add(&mut display, string::utf8(b"description"), string::utf8(b"{description}"));
+    // Missing: icon_url, image_url, project_url
+    display::update_version(&mut display);
+    transfer::public_freeze_object(display);  // permanently locked without icon
+    transfer::public_transfer(publisher, tx_context::sender(ctx));
+}
+
+// SAFE — all fields set before freeze, or Display kept mutable via publisher
+fun init(otw: MY_NFT, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    let mut display = display::new<MyNFT>(&publisher, ctx);
+    display::add(&mut display, string::utf8(b"name"), string::utf8(b"{name}"));
+    display::add(&mut display, string::utf8(b"description"), string::utf8(b"{description}"));
+    display::add(&mut display, string::utf8(b"image_url"), string::utf8(b"{image_url}"));
+    display::add(&mut display, string::utf8(b"project_url"), string::utf8(b"https://example.com"));
+    display::update_version(&mut display);
+    transfer::public_transfer(display, tx_context::sender(ctx));  // kept mutable
+}
+```
+
+**Check:**
+1. Find all `transfer::public_freeze_object` calls on Display objects
+2. Verify all standard fields are set before freeze: `name`, `description`, `image_url`, `project_url`
+3. If any fields missing before freeze → flag as Medium (irreversible)
+4. If protocol needs to update Display later (e.g., for metadata changes), freezing is premature
+
+---
+
+## SUI-39 — Multiple Publisher Objects
+
+**Description:** Multiple modules in the same package each call `package::claim` to create separate `Publisher` objects. This splits package authority across multiple objects, making governance harder and creating confusion about which `Publisher` controls which `Display` or `TransferPolicy`.
+
+**Pattern:**
+```move
+// ANTI-PATTERN — two modules in same package each claim Publisher
+// module_a.move
+fun init(otw: MODULE_A, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    transfer::public_transfer(publisher, tx_context::sender(ctx));
+}
+
+// module_b.move
+fun init(otw: MODULE_B, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    transfer::public_transfer(publisher, tx_context::sender(ctx));
+}
+
+// PREFERRED — single Publisher, set up Display for each type
+// main.move
+fun init(otw: MAIN, ctx: &mut TxContext) {
+    let publisher = package::claim(otw, ctx);
+    let display_a = display::new<TypeA>(&publisher, ctx);
+    let display_b = display::new<TypeB>(&publisher, ctx);
+    // ... set up both displays ...
+    transfer::public_transfer(publisher, tx_context::sender(ctx));
+}
+```
+
+**Check:**
+1. Count `package::claim` calls across all modules in the package
+2. If more than one → flag as Low (governance complexity)
+3. Cross-ref: SUI-24 (Publisher security)
+
+---
+
+## SUI-40 — Unnecessary `public(package)` Visibility
+
+**Description:** Functions declared `public(package)` that are only called within their own module. The broader visibility unnecessarily expands the attack surface — any future module added to the package can call these functions.
+
+**Check:**
+1. For each `public(package)` function, search all other modules in the package for calls to it
+2. If no cross-module callers exist → flag as Low (should be `fun` / private)
+3. Multi-package caveat: if the project has multiple packages where one depends on another, verify cross-package calls before flagging
+4. Severity: Low (attack surface reduction, not a direct vulnerability)
+
+---
+
+## SUI-41 — NFT Stores Constant Fields (Use Display)
+
+**Description:** NFT structs that store per-collection constants (name, description, project_url) in every instance. These fields are identical for every NFT — storing them wastes gas on mint and bloats on-chain storage. Sui's `Display` object handles collection-level metadata via templates.
+
+**Pattern:**
+```move
+// ANTI-PATTERN — every NFT stores identical collection metadata
+public struct MyNFT has key, store {
+    id: UID,
+    name: String,           // same for every NFT in collection
+    description: String,    // same for every NFT in collection
+    project_url: String,    // same for every NFT in collection
+    serial_number: u64,     // this IS per-instance — keep it
+}
+
+// PREFERRED — only per-instance fields in struct, constants in Display template
+public struct MyNFT has key, store {
+    id: UID,
+    serial_number: u64,
+    image_url: String,  // per-instance
+}
+// Display template: "name" → "MyCollection #{serial_number}"
+// Display template: "project_url" → "https://example.com"
+```
+
+**Check:**
+1. Look for NFT structs with fields like `name`, `description`, `project_url`, `collection_name` that are set to the same value on every mint
+2. If a field is constant across all instances → should be in Display template, not the struct
+3. Severity: Low (gas inefficiency, not a security issue)
+
+---
+
+## SUI-42 — Migration Function in Non-Upgraded Package
+
+**Description:** `migrate` or `migration` functions present in a v1 package that has never been upgraded. These functions are dead code — they cannot be called meaningfully because no version transition has occurred.
+
+**Pattern:**
+```move
+// In a v1 package that has never been upgraded:
+const VERSION: u64 = 1;
+
+// DEAD CODE — no migration from v0 exists, this function is meaningless
+public fun migrate(state: &mut State, cap: &AdminCap) {
+    assert!(state.version == VERSION - 1, EWrongVersion);  // VERSION - 1 = 0, but no v0 exists
+    state.version = VERSION;
+}
+```
+
+**Check:**
+1. If the package VERSION constant is 1 and the package has no upgrade history → flag migration functions as dead code
+2. Severity: Low (unnecessary code complexity)
+3. If the migration function has a bug (e.g., wrong version math), note it as Info
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -996,3 +1412,16 @@ public fun cancel_schedule<T: key + store>(self: &mut DelayedWrapper<T>) {
 - [ ] `UpgradeCap` held by governance with minimum-required policy; premature immutability flagged (SUI-27)
 - [ ] Per-call numeric limits (close factor, rate limits, cooldowns) enforced per-TRANSACTION not per-call — PTB repeated call bypass (SUI-28)
 - [ ] Time-lock wrappers: check if inner object mutable during pending transfer, and if cancel works after deadline (SUI-29)
+- [ ] No VecMap/VecSet used for user-driven unbounded collections — use Table for >100 entries (SUI-30)
+- [ ] Shared object read-only functions use `&` not `&mut` — flag excessive mutable access ratio (SUI-31)
+- [ ] All `transfer::transfer` to object addresses have corresponding `receive` functions on target type (SUI-32)
+- [ ] Object reference fields use `ID` type, not `address` (SUI-33)
+- [ ] Functions that create objects return them instead of calling transfer internally (SUI-34)
+- [ ] No batch functions with parallel vectors — use single-item functions + PTB loops (SUI-35)
+- [ ] No Solidity-style address-to-role mappings — use Move capability objects (SUI-36)
+- [ ] No user-defined types shadowing Sui framework names: CoinMetadata, TreasuryCap, Publisher, etc. (SUI-37)
+- [ ] Display/metadata objects have all required fields set before any freeze (SUI-38)
+- [ ] Single Publisher object per package, not multiple (SUI-39)
+- [ ] No unnecessary `public(package)` visibility — downgrade to private if no cross-module callers (SUI-40)
+- [ ] NFT structs store only per-instance fields — collection constants belong in Display templates (SUI-41)
+- [ ] No dead migration functions in v1 (never-upgraded) packages (SUI-42)

@@ -54,6 +54,34 @@ struct AdminCap has drop {}
 **Risk:** Integrators assume the function performs real conversion (e.g., `into_UD30x9` implies scaling to 30-digit-9-decimal fixed-point), but it's just a struct wrap. Downstream math is silently wrong.
 **Check:** For every `into_*` / `from_*` / `to_*` function, verify the function body matches what the name implies. Misleading names are Low/Informational.
 
+### 1.6 Authorization Returns Bool Without Assertion
+**Pattern:** Authorization function returns `bool` instead of aborting on failure. Callers can silently discard the return value, bypassing the check entirely.
+**Risk:** If a caller writes `is_authorized(registry, addr);` instead of `assert!(is_authorized(registry, addr), E_NOT_AUTHORIZED)`, the authorization check runs but the result is ignored — access is granted unconditionally.
+
+```move
+// VULNERABLE — returns bool, caller can ignore the result
+public fun is_authorized(registry: &Registry, addr: address): bool {
+    registry.admins.contains(&addr)
+}
+
+// Caller forgets to check return value — authorization silently bypassed
+public entry fun admin_action(registry: &Registry, ctx: &TxContext) {
+    is_authorized(registry, tx_context::sender(ctx)); // return value discarded!
+    do_critical_operation();
+}
+
+// SAFE — aborts on failure, cannot be silently ignored
+public fun assert_authorized(registry: &Registry, addr: address) {
+    assert!(registry.admins.contains(&addr), ENotAuthorized);
+}
+```
+
+**Check:**
+1. Grep for authorization/permission functions that return `bool` (names like `is_admin`, `is_authorized`, `has_role`, `check_permission`)
+2. Trace every call site — is the return value used in an `assert!` or `if` check?
+3. If ANY call site discards the return value → flag as High
+4. Recommend converting to `assert_*` pattern that aborts on failure
+
 ---
 
 ## 2. Arithmetic & Overflow
@@ -229,6 +257,66 @@ public entry fun withdraw(account: &signer, target: address) {
 **Pattern:** Logic that depends on `Clock` (Sui) or `timestamp::now_seconds` (Aptos).
 **Risk:** Validators have limited but real ability to influence block timestamps. Flash-loan window exploits.
 **Check:** Avoid hardcoded time windows shorter than ~30 seconds. Flag any logic where timestamp manipulation gives economic benefit.
+
+### 4.5 Inverted Security Logic
+**Pattern:** A security check that blocks the wrong party, compares the wrong direction, or asserts the opposite of the intended condition. The check exists but protects the attacker instead of the protocol.
+**Risk:** The presence of the check creates a false sense of security — code reviewers see an `assert!` and move on, but the logic is backwards.
+
+```move
+// VULNERABLE — checks recipient (to) instead of sender (from) for liquidate-only restriction
+fun assert_not_liquidate_only<T>(registry: &InvestorInfo<T>, to: &PartyInfo) {
+    assert!(!lock_manager::is_liquidate_only(registry, *to.id()), ELiquidateOnly);
+    // BUG: should check the sender, not the recipient
+}
+
+// VULNERABLE — inverted time comparison, lock expires immediately
+fun assert_lock_active(lock: &Lock, clock: &Clock) {
+    assert!(clock::timestamp_ms(clock) > lock.expires_at, ELockActive);
+    // BUG: should be < (lock is active while time is BEFORE expiry)
+}
+
+// SAFE — correct party and correct direction
+fun assert_not_liquidate_only<T>(registry: &InvestorInfo<T>, from: &PartyInfo) {
+    assert!(!lock_manager::is_liquidate_only(registry, *from.id()), ELiquidateOnly);
+}
+fun assert_lock_active(lock: &Lock, clock: &Clock) {
+    assert!(clock::timestamp_ms(clock) < lock.expires_at, ELockActive);
+}
+```
+
+**Check:**
+1. For every `assert!` in authorization/security context: does the variable being checked match the intended party (sender vs recipient, from vs to)?
+2. For every comparison operator in time/deadline checks: does `<` vs `>` match the intended semantics?
+3. For every boolean negation (`!`): trace the logic — is the condition checking what the error message claims?
+4. Cross-ref with error constant names — does the error name match what the condition actually prevents?
+
+### 4.6 Wrong Field Update
+**Pattern:** A function intended to update field X accidentally reads or writes to field Y. Both fields have the same type (`u64`, `u128`, `address`), so the compiler doesn't catch it.
+**Risk:** Silent data corruption — the intended field is unchanged, a different field is overwritten. Can lead to authorization bypass if an admin field is overwritten, or fund loss if a balance field is corrupted.
+
+```move
+// VULNERABLE — function is called set_fee but updates balance
+public fun set_fee(config: &mut Config, new_fee: u64) {
+    config.balance = new_fee;  // BUG: should be config.fee = new_fee
+}
+
+// VULNERABLE — reads wrong field for comparison
+public fun check_limit(pool: &Pool, amount: u64) {
+    assert!(amount <= pool.min_deposit, E_EXCEEDS_LIMIT);
+    // BUG: should compare against pool.max_withdrawal
+}
+
+// SAFE — correct fields
+public fun set_fee(config: &mut Config, new_fee: u64) {
+    config.fee = new_fee;
+}
+```
+
+**Check:**
+1. For every `set_*` / `update_*` function, verify the field being written matches the function name and parameter name
+2. For every comparison in validation logic, verify the field being compared is the one relevant to the check (e.g., `max_withdrawal` for withdrawal limits, not `min_deposit`)
+3. Pay special attention to structs with multiple same-typed fields (`u64`, `address`) — compiler cannot catch field swaps
+4. Cross-ref: field names in events should match the fields that were actually modified
 
 ---
 
@@ -1067,6 +1155,7 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 
 - [ ] All entry functions have access control
 - [ ] No capability structs with `copy` ability
+- [ ] No authorization functions returning bool with unchecked call sites — use assert pattern (1.6)
 - [ ] All arithmetic checked for overflow/underflow DoS
 - [ ] No division before multiplication in financial math
 - [ ] All divisions guarded against zero denominator
@@ -1093,6 +1182,8 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] No circular/recursive function call chains (10.1)
 - [ ] Stake/unstake cannot manipulate reward accumulators in same transaction (10.2)
 - [ ] All time comparisons use correct operator direction (10.3)
+- [ ] No inverted security logic — assert conditions check the right party and correct comparison direction (4.5)
+- [ ] No wrong-field updates — set/update functions modify the intended field, not a same-typed sibling (4.6)
 - [ ] Liquidation functions pass correct variables — debt vs collateral (10.4)
 - [ ] Permissionless terminal-state transitions clean up all cross-module sub-objects (11.1)
 - [ ] All fixed-point helper libraries opened and value bounds derived — `mul` intermediate cannot overflow before normalizing division (2.6)
