@@ -521,6 +521,67 @@ public fun update(emode: &mut EMode, new_params: NewEMode) {
 
 ---
 
+## DEFI-88 — Missing Post-Trade Health Check in Margin Trading Proxy
+
+**Description:** Margin protocols often wrap an underlying orderbook's trading functions
+behind a proxy module that enforces margin-specific invariants. If the proxy checks
+price bounds and pool identity but does NOT revalidate the borrower's health ratio
+after the trade executes, a leveraged account can keep placing loss-making trades
+even when already liquidatable.
+
+**Pattern:**
+```move
+// VULNERABLE — proxy validates price but not post-trade health
+public fun place_order<B, Q>(
+    registry: &Registry,
+    margin_account: &mut MarginAccount<B, Q>,
+    pool: &mut Pool<B, Q>,
+    price: u64,
+    quantity: u64,
+    is_bid: bool,
+    clock: &Clock,
+    ctx: &TxContext,
+): OrderInfo {
+    assert!(margin_account.pool() == pool.id(), E_WRONG_POOL);
+    assert!(registry.pool_enabled(pool), E_DISABLED);
+    registry.assert_price_bounds(pool.id(), price, is_bid, clock);
+    // NO health check after trade
+    let proof = margin_account.trade_proof(ctx);
+    pool.place_order(margin_account.balance_manager_mut(ctx), &proof, price, quantity, is_bid, clock, ctx)
+}
+
+// SAFE — revalidate health after every trade when debt exists
+public fun place_order<B, Q>(
+    registry: &Registry,
+    margin_account: &mut MarginAccount<B, Q>,
+    pool: &mut Pool<B, Q>,
+    price: u64,
+    quantity: u64,
+    is_bid: bool,
+    clock: &Clock,
+    ctx: &TxContext,
+): OrderInfo {
+    assert!(margin_account.pool() == pool.id(), E_WRONG_POOL);
+    assert!(registry.pool_enabled(pool), E_DISABLED);
+    registry.assert_price_bounds(pool.id(), price, is_bid, clock);
+    let proof = margin_account.trade_proof(ctx);
+    let info = pool.place_order(margin_account.balance_manager_mut(ctx), &proof, price, quantity, is_bid, clock, ctx);
+    if (margin_account.has_debt()) {
+        let rr = margin_account.risk_ratio(registry, pool, clock);
+        assert!(registry.can_trade(pool.id(), rr), E_HEALTH_TOO_LOW);
+    };
+    info
+}
+```
+
+**Check:**
+1. Find every proxy function that places orders on behalf of a margin/leveraged account
+2. Verify each one recomputes health ratio AFTER the trade settles
+3. Compare with borrow/withdraw paths — if those check health but trade paths don't, flag it
+4. Cross-ref: DEFI-52 (withdrawal threshold), DEFI-89 (self-trade value extraction)
+
+---
+
 ## Lending Verification Checklist
 
 - [ ] Liquidation threshold boundary: `<` vs `<=` matches the spec (DEFI-25)
@@ -536,3 +597,4 @@ public fun update(emode: &mut EMode, new_params: NewEMode) {
 - [ ] Admin parameter setters call `accrue_interest()` before applying new values (DEFI-80)
 - [ ] Emergency mechanism entry and stop conditions read from the same source (DEFI-82)
 - [ ] Admin config updates do NOT overwrite embedded runtime state (limiters, accumulators, counters) (DEFI-84)
+- [ ] Margin trade proxy revalidates health ratio after every trade when debt exists (DEFI-88)

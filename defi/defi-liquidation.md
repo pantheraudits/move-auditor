@@ -459,6 +459,43 @@ let max_repay = obligation.liquidation_snapshot() * close_factor - obligation.al
 
 ---
 
+## DEFI-89 — Self-Trade Value Extraction on Unhealthy Margin Accounts
+
+**Description:** When a margin protocol's self-match protection only compares
+account IDs (not common ownership), an attacker can trade their unhealthy margin
+account against a second account they control. Each round-trip at the worst
+price allowed by the oracle guard moves value from the debt-backed account to the
+clean account. Once the margin account is drained, liquidation removes all
+remaining collateral but cannot fully repay the debt — the shortfall becomes
+bad debt absorbed by lenders.
+
+**Pattern:**
+```move
+// VULNERABLE — self-match check uses account ID only
+fun check_self_match(maker_account_id: ID, taker_account_id: ID) {
+    assert!(maker_account_id != taker_account_id, E_SELF_MATCH);
+    // same owner with two accounts bypasses this
+}
+
+// Attacker flow:
+// 1. Account A (margin): borrow at max leverage, risk_ratio ~1.25
+// 2. Account B (normal): place maker bid at lower oracle bound
+// 3. Account A sells into B at worst allowed price — no health check (DEFI-88)
+// 4. Repeat until A is liquidatable
+// 5. Liquidate A: out_amount = repay * (1 + bonus)
+//    If collateral < debt * (1 + bonus), partial repay → residual bad debt
+```
+
+**Check:**
+1. Identify what self-match protection compares — account ID only, or also owner address?
+2. If account-ID-only, verify whether a margin account and a normal account owned by the
+   same address can cross orders
+3. Check if liquidation forces full debt repayment when all collateral is consumed —
+   if not, calculate the bad debt: `1 - risk_ratio / (1 + liquidation_bonus)`
+4. Cross-ref: DEFI-53 (bad debt handling), DEFI-88 (missing post-trade health check)
+
+---
+
 ## Liquidation Economics Validation
 
 **Before reporting ANY liquidation finding, answer these questions:**
@@ -499,3 +536,4 @@ let max_repay = obligation.liquidation_snapshot() * close_factor - obligation.al
 - [ ] Liquidator can specify minimum collateral received (DEFI-66)
 - [ ] Liquidation path checks idle cash availability before redeeming underlying (DEFI-81)
 - [ ] Close factor enforced per-TRANSACTION (cumulative), not per-call — PTB repeated call bypass (DEFI-83)
+- [ ] Self-match protection prevents same-owner cross between margin and normal accounts (DEFI-89)

@@ -42,8 +42,8 @@ Load these files when entering Phase 7 — Verify & Triage:
 
 | Signal | Load | Follow-up |
 |--------|------|-----------|
-| `borrow`, `repay`, `collateral`, `health_factor` | `defi-vectors.md`, `defi/defi-lending.md` | cross-module interaction scan |
-| `liquidat`, `seize`, `bad_debt`, `insurance` | `defi/defi-liquidation.md` | idle-cash and price-source checks |
+| `borrow`, `repay`, `collateral`, `health_factor`, `margin`, `risk_ratio`, `leverage` | `defi-vectors.md`, `defi/defi-lending.md` | cross-module interaction scan |
+| `liquidat`, `seize`, `bad_debt`, `insurance`, `self_match` | `defi/defi-liquidation.md` | idle-cash and price-source checks |
 | `oracle`, `pyth`, `switchboard`, `price_feed`, `twap` | `defi/defi-oracle.md` | stale/deviation audit |
 | `reward_per_share`, `accumulator`, `claim`, `stake`, `unstake`, `reward_manager`, `pool_reward`, `liquidity_mining`, `total_rewards` | `defi/defi-staking.md`, `defi/defi-math-precision.md`, `semantic-gap-checks.md` | checkpoint/accumulator review + **mandatory DEFI-85/86 fixed-point overflow check** |
 | `swap`, `pool`, `lp`, `min_amount_out`, `slippage` | `defi/defi-slippage.md` | PTB / multi-hop review |

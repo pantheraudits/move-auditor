@@ -175,13 +175,14 @@ move-auditor/
 
 ## Real-World Impact
 
-Bugs found by `move-auditor` have been accepted and merged into production codebases:
+Bugs found by `move-auditor` have been accepted in production codebases and bug bounty programs:
 
-| Project | Finding | PR | Status |
-|---------|---------|----| -------|
-| [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [#263](https://github.com/OpenZeppelin/contracts-sui/pull/263) | **Merged** |
+| Context | Finding | Outcome |
+|---------|---------|---------|
+| [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [PR #263](https://github.com/OpenZeppelin/contracts-sui/pull/263) **Merged** |
+| Sui DeFi margin protocol (bug bounty, name withheld) | Missing post-trade health check in margin trading proxy — leveraged accounts can keep trading after becoming liquidatable, enabling value extraction to a second account and leaving bad debt for lenders | **Confirmed** (duplicate of prior report) |
 
-> This was a unique find from [benchmarking](benchmarks/BENCHMARK-openzeppelin.md) — no other AI audit tool (MAIA, Raw Claude CLI) caught it.
+> The OpenZeppelin find was a unique result from [benchmarking](benchmarks/BENCHMARK-openzeppelin.md) — no other AI audit tool (MAIA, Raw Claude CLI) caught it.
 
 ---
 
