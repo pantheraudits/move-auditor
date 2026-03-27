@@ -15,7 +15,7 @@ and chain-specific updates all help make this skill more useful for the Move sec
    - **DeFi cross-cutting** → `defi-vectors.md` (DEFI-01 to DEFI-10)
    - **DeFi subcategory** → `defi/defi-<category>.md` (DEFI-11+, see table below)
 3. Add your check with:
-   - A numbered ID (next available: SUI-29, APT-25, DEFI-87)
+   - A numbered ID (next available: SUI-43, APT-25, DEFI-88)
    - Vulnerable code pattern (with comment `// VULNERABLE`)
    - Safe code pattern (with comment `// SAFE`)
    - Risk description and attack scenario
@@ -31,13 +31,14 @@ and chain-specific updates all help make this skill more useful for the Move sec
 | Staking / Yield | `defi/defi-staking.md` | DEFI-11 to DEFI-16 |
 | Oracle | `defi/defi-oracle.md` | DEFI-17 to DEFI-24 |
 | Lending / Borrowing | `defi/defi-lending.md` | DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
-| Math / Precision | `defi/defi-math-precision.md` | DEFI-35 to DEFI-42, DEFI-85, DEFI-86 |
+| Math / Precision | `defi/defi-math-precision.md` | DEFI-35 to DEFI-42, DEFI-85 to DEFI-87 |
 | Slippage / MEV | `defi/defi-slippage.md` | DEFI-43 to DEFI-49 |
 | Liquidation | `defi/defi-liquidation.md` | DEFI-50 to DEFI-66, DEFI-81, DEFI-83 |
 | Auction / CLM | `defi/defi-auction-clm.md` | DEFI-67 to DEFI-73 |
 | Signatures | `defi/defi-signatures.md` | DEFI-74 to DEFI-79 |
+| Lending Design | `defi/defi-lending-design-patterns.md` | DESIGN-L1 to DESIGN-L4 |
 
-New DeFi checks should use the next sequential ID (DEFI-87+) and go in the matching subcategory file. If no subcategory fits, create a new `defi/defi-<category>.md` file and register it in `SKILL.md` and `defi-vectors.md`.
+New DeFi checks should use the next sequential ID (DEFI-88+) and go in the matching subcategory file. If no subcategory fits, create a new `defi/defi-<category>.md` file and register it in `SKILL.md` and `defi-vectors.md`.
 
 ---
 
