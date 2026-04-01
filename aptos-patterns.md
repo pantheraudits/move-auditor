@@ -470,6 +470,8 @@ public fun mint(creator: &signer) {
 2. `TransferRef`, `DeleteRef`, `ExtendRef` derived from `ConstructorRef` must be stored securely or not at all
 3. If `TransferRef` is stored, verify it's access-gated — otherwise original creator can transfer the object back at will
 4. Check NFT minting flows especially — returned refs enable post-sale theft
+5. **Ungated transfer control:** If ungated transfers are NOT needed, verify `object::set_untransferable()` is called during construction. Without this, anyone holding a `TransferRef` can move the object freely
+6. **DeleteRef discipline:** `DeleteRef` should only be generated for objects that are genuinely intended to be burnable/deletable. Unnecessary `DeleteRef` generation creates object destruction risk — if it leaks or is stored without access control, anyone can permanently destroy the object
 
 *Source: [Aptos Move Security Guidelines](https://aptos.dev/build/smart-contracts/move-security-guidelines)*
 
@@ -785,6 +787,69 @@ public entry fun set_config(admin: &signer, new_fee: u64) acquires Config {
 
 ---
 
+## APT-25 — Input Validation Gaps
+
+**Description:** Entry functions that accept user-supplied parameters without validating them against safe ranges. Unlike arithmetic overflow (which Move aborts on), missing input validation allows logically invalid operations to succeed silently — zero-value deposits that corrupt accounting, oversized strings that bloat storage, zero addresses that brick ownership, or out-of-range enum values that bypass intended logic.
+
+**Pattern:**
+```move
+// VULNERABLE — no input validation, multiple issues
+public entry fun create_pool(
+    admin: &signer,
+    name: String,
+    fee_bps: u64,
+    recipient: address,
+    pool_type: u8,
+    initial_tokens: vector<address>
+) {
+    // name could be empty or 10KB — storage bloat / display issues
+    // fee_bps could be 0 (no fees collected) or 100_000 (1000% fee)
+    // recipient could be @0x0 — funds sent to unrecoverable address
+    // pool_type could be 255 — no enum range check, undefined behavior
+    // initial_tokens could be empty — pool created with no assets
+}
+
+// SAFE — comprehensive input validation
+public entry fun create_pool(
+    admin: &signer,
+    name: String,
+    fee_bps: u64,
+    recipient: address,
+    pool_type: u8,
+    initial_tokens: vector<address>
+) {
+    // String length
+    assert!(string::length(&name) > 0, E_EMPTY_NAME);
+    assert!(string::length(&name) <= MAX_NAME_LENGTH, E_NAME_TOO_LONG);
+
+    // Numeric bounds
+    assert!(fee_bps > 0, E_ZERO_FEE);
+    assert!(fee_bps <= MAX_FEE_BPS, E_FEE_TOO_HIGH);
+
+    // Address validation
+    assert!(recipient != @0x0, E_ZERO_ADDRESS);
+
+    // Enum-like range
+    assert!(pool_type < NUM_POOL_TYPES, E_INVALID_POOL_TYPE);
+
+    // Vector length
+    assert!(vector::length(&initial_tokens) > 0, E_EMPTY_VECTOR);
+    assert!(vector::length(&initial_tokens) <= MAX_TOKENS, E_TOO_MANY_TOKENS);
+}
+```
+
+**Check — 6 validation categories:**
+1. **Zero amount:** All `amount: u64` parameters → `assert!(amount > 0, E_ZERO_AMOUNT)`. Zero-value operations can corrupt counters (see APT-13), create empty positions, or bypass minimum thresholds
+2. **Max limit:** Numeric inputs bounded by protocol constants → `assert!(amount <= MAX, E_TOO_HIGH)`. Prevents overflow in downstream arithmetic and enforces protocol invariants (e.g., max fee, max leverage)
+3. **Vector length:** `assert!(vector::length(&v) > 0, E_EMPTY)` and `assert!(vector::length(&v) <= MAX, E_TOO_MANY)`. Empty vectors cause silent no-ops; unbounded vectors cause gas DoS (see APT-10)
+4. **String length:** `assert!(string::length(&s) <= MAX_LENGTH, E_TOO_LONG)`. Unbounded strings bloat on-chain storage and can cause display issues in frontends
+5. **Zero address:** `assert!(addr != @0x0, E_ZERO_ADDRESS)`. Setting admin/treasury/recipient to `@0x0` permanently bricks the associated functionality — no private key can sign for `@0x0`
+6. **Enum-like range:** `assert!(type_id < NUM_TYPES, E_INVALID_TYPE)`. Out-of-range values on `u8`/`u64` used as type discriminators bypass intended match arms or hit default cases
+
+*Cross-ref: APT-13 (zero-value FA manipulation), APT-10 (vector unbounded growth), common-move.md 2.1 (arithmetic)*
+
+---
+
 ## Aptos Verification Checklist
 
 - [ ] All `table::borrow` / `table::remove` preceded by `table::contains`
@@ -810,3 +875,27 @@ public entry fun set_config(admin: &signer, new_fee: u64) acquires Config {
 - [ ] Struct field order and types preserved across upgrades — append-only or migration function exists (APT-22)
 - [ ] Each resource account used by exactly one module — no cross-module signer scope creep (APT-23)
 - [ ] Every `public entry fun` / `entry fun` with `&signer` validates address against stored authority — not just used as destination (APT-24)
+- [ ] All entry function parameters validated: zero amounts, max limits, vector lengths, string lengths, zero addresses, enum-like ranges (APT-25)
+- [ ] Objects that should NOT be freely transferable call `object::set_untransferable()` during construction (APT-17.5/6)
+- [ ] `DeleteRef` only generated for objects intended to be burnable — not generated "just in case" (APT-17.6)
+
+### Aptos Build & Test Commands
+
+Run these during Phase 1 build detection when `BUILD_AVAILABLE = true`:
+
+```bash
+# Compile — catches type errors, missing acquires, ability violations
+aptos move compile
+
+# Run tests — catches logic bugs, assertion failures
+aptos move test
+
+# Coverage — target 100% on security-critical modules
+aptos move test --coverage
+aptos move coverage summary
+
+# Per-module coverage detail
+aptos move coverage source --module <module_name>
+```
+
+Flag if coverage is below 80% on any module containing `entry fun` or `borrow_global_mut`.

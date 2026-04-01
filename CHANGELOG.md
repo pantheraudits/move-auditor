@@ -11,6 +11,30 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.6.0] — 2026-04-01
+
+### Aptos Patterns Enhancement — input validation, object safety, testing
+
+Expanded Aptos-specific coverage with new input validation checks, stronger object
+safety guidance, and build/test tooling for Phase 1 detection.
+
+**aptos-patterns.md — 1 new pattern + 2 enhanced checks:**
+- APT-25: Input Validation Gaps — structured 6-category checklist for Aptos entry function
+  parameter validation (zero amount, max limit, vector length, string length, zero address,
+  enum-like range). Cross-references APT-13, APT-10, common-move 2.1
+- APT-17 enhanced: Added ungated transfer control (`object::set_untransferable()`) and
+  DeleteRef discipline checks — objects that shouldn't be freely transferable or deletable
+  now have explicit verification items
+- Aptos Verification Checklist: 3 new items for APT-25, ungated transfers, DeleteRef safety
+- Aptos Build & Test Commands: Added `aptos move compile`, `aptos move test --coverage`,
+  `aptos move coverage summary`, `aptos move coverage source` commands for Phase 1 build
+  detection, with coverage threshold guidance
+
+**SKILL.md:**
+- Updated aptos-patterns.md reference range from APT-24 to APT-25
+
+---
+
 ## [3.5.0] — 2026-03-27
 
 ### Expanded Sui Patterns & Logic Checks — 16 new vulnerability patterns
