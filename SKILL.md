@@ -54,7 +54,7 @@ file in this skill's directory (e.g., if SKILL.md is at
 | `move-fp-catalog.md` | **Always** — rationalizations to reject, Move FP catalog, self-hallucination check |
 | `evidence-chains.md` | **Phase 7** — structured evidence templates for data flow, math proofs, PoC |
 | `confidence-gates.md` | **Phase 7** — confidence gating, hard evidence requirements per finding type |
-| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-42 |
+| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-43 |
 | `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-25 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
 | `semantic-gap-checks.md` | When the protocol has accumulators, checkpoints, rewards, lending state, cross-module accounting, or multi-step state transitions |

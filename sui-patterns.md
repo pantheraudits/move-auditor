@@ -1381,6 +1381,55 @@ public fun migrate(state: &mut State, cap: &AdminCap) {
 
 ---
 
+## SUI-43 — Transaction Digest / UID / Epoch Used as Randomness
+
+**Description:** `tx_context::digest()` returns the 32-byte transaction hash, which developers sometimes use as a randomness source for lotteries, NFT trait generation, or game outcomes. This is **not random** — the digest is deterministic and known to the transaction sender before execution. Validators can also reorder or exclude transactions to influence outcomes. The same applies to `object::id()` bytes (derived from digest + counter) and `epoch()` / `epoch_timestamp_ms()` (coarse and publicly known).
+
+**Pattern:**
+```move
+// VULNERABLE — digest is deterministic, sender knows it before execution
+public entry fun mint_random_nft(ctx: &mut TxContext) {
+    let digest = tx_context::digest(ctx);
+    let rarity = (*vector::borrow(digest, 0) as u64) % 100;
+    // Attacker simulates tx locally, only submits if rarity > 95
+    mint_with_rarity(rarity, ctx);
+}
+
+// VULNERABLE — UID bytes are derived from digest, equally predictable
+public entry fun lottery_draw(pool: &mut Pool, ctx: &mut TxContext) {
+    let ticket = object::new(ctx);
+    let id_bytes = object::uid_to_bytes(&ticket);
+    let winner_index = (*vector::borrow(&id_bytes, 0) as u64) % pool.participants;
+    // Predictable — attacker controls when to enter
+    object::delete(ticket);
+}
+
+// VULNERABLE — epoch/timestamp are publicly known, trivially predictable
+public entry fun daily_reward(state: &mut State, ctx: &TxContext) {
+    let seed = tx_context::epoch(ctx) + tx_context::epoch_timestamp_ms(ctx);
+    let reward_tier = seed % 5;
+    // Every user in the same epoch gets the same "random" tier
+}
+
+// SAFE — use Sui's on-chain VRF (sui::random, available since v1.22)
+public entry fun mint_random_nft(r: &Random, ctx: &mut TxContext) {
+    let gen = random::new_generator(r, ctx);
+    let rarity = random::generate_u64_in_range(&mut gen, 0, 99);
+    mint_with_rarity(rarity, ctx);
+}
+```
+
+**Check:**
+1. Grep for `tx_context::digest` — any usage for randomness, trait generation, shuffling, or outcome selection is Critical in gaming/lottery, High in NFT minting
+2. Grep for `object::uid_to_bytes` or `object::id_to_bytes` used in modulo/math for selection — same predictability issue
+3. Grep for `epoch()` or `epoch_timestamp_ms()` used as seeds or selection input — all publicly known values
+4. Safe alternative: `sui::random::Random` shared object passed as `r: &Random`, used with `random::new_generator` — this is Sui's on-chain VRF backed by threshold cryptography
+5. If the protocol predates `sui::random` (pre-v1.22), flag the use of digest-based randomness and recommend migration
+
+*Cross-ref: APT-20 (Aptos randomness bias via test-and-abort / undergasing — different mechanism, same bug class)*
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -1425,3 +1474,4 @@ public fun migrate(state: &mut State, cap: &AdminCap) {
 - [ ] No unnecessary `public(package)` visibility — downgrade to private if no cross-module callers (SUI-40)
 - [ ] NFT structs store only per-instance fields — collection constants belong in Display templates (SUI-41)
 - [ ] No dead migration functions in v1 (never-upgraded) packages (SUI-42)
+- [ ] No `tx_context::digest()`, `uid_to_bytes`, `epoch()`, or `epoch_timestamp_ms()` used as randomness — use `sui::random::Random` (SUI-43)
