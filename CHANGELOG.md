@@ -11,6 +11,21 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.6.1] — 2026-04-03
+
+### Audit methodology improvements — admin analysis, parallel subsystem checks, bit-shift safety
+
+- **SKILL.md Phase 2**: Added Perspective 5 — Bidirectional Admin Checker. Every admin
+  function now mandates analysis in both directions (admin→user harm AND user→admin grief)
+- **SKILL.md Phase 7**: Added Step 6 — Post-Confirmation Parallel Subsystem Check. After
+  confirming any Medium+ finding, grep all call sites and verify the same bug doesn't exist
+  in parallel subsystems (deposit/borrow, token0/token1, pool A/pool B)
+- **common-move.md 2.5**: Added Bit-Shift Wrapping (Silent Overflow). Move bit-shifts
+  (`<<`/`>>`) silently wrap instead of aborting — unlike standard arithmetic. Off-by-one
+  in custom overflow checks produces corrupted results, not aborts
+
+---
+
 ## [3.6.0] — 2026-04-01
 
 ### Aptos Patterns Enhancement — input validation, object safety, testing

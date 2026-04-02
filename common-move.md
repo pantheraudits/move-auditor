@@ -111,6 +111,29 @@ let result = balance - fee; // aborts if fee > balance
 **Risk:** Silent truncation of high bits.
 **Check:** All narrowing casts should have bounds assertions.
 
+### 2.5 Bit-Shift Wrapping (Silent Overflow)
+**Pattern:** Bit-shift operations (`<<`, `>>`) in custom math or fixed-point libraries.
+**Risk:** Unlike standard arithmetic (`+`, `-`, `*`), **bit-shifts in Move do NOT abort on overflow — they silently wrap**. `(1u64 << 64)` produces `0`, not an abort. `(x as u256) << 64` wraps around if the result exceeds `MAX_U256`. This makes custom overflow checks for bit-shifts critical — an off-by-one in the boundary condition (`<` vs `>=`) silently produces a corrupted result instead of aborting.
+**Check:**
+1. Grep for `<<`, `>>`, `shl`, `shr`, `checked_shl`, `checked_shr` in math/utility modules
+2. For each shift: is the operand validated against bit-width overflow BEFORE the shift?
+3. What is the exact boundary condition? Verify the comparison operator (`<` vs `<=` vs `>=`)
+4. If the shift result feeds into balance, liquidity, supply, or share calculations → Critical
+
+```move
+// VULNERABLE — boundary check uses < instead of >=, allows value at exact boundary
+fun checked_shl(n: u256, shift: u8): u256 {
+    assert!(n < (1u256 << (256 - (shift as u16))), E_OVERFLOW); // off-by-one: n == boundary passes
+    n << shift  // silently wraps to small number
+}
+
+// SAFE — correct boundary
+fun checked_shl(n: u256, shift: u8): u256 {
+    assert!(n <= (MAX_U256 >> (shift as u16)), E_OVERFLOW);  // tight bound
+    n << shift
+}
+```
+
 ### 2.6 Fixed-Point Helper Library Overflow (Multiply-Before-Divide)
 
 **Pattern:** Protocol uses a fixed-point math library (e.g., `float.move`, `decimal.move`, `wad_ray.move`) whose `mul` function computes `(a.value * b.value) / WAD` internally. The intermediate product `a.value * b.value` can overflow and abort **before** the normalizing division executes. When the caller does `A.mul(B).div(C)`, the overflow in `mul` fires before `div(C)` can reduce the result to a safe range.

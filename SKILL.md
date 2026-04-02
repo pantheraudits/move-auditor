@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.6.0"
+  version: "3.6.1"
   author: pantheraudits
   category: security
   tags:
@@ -167,7 +167,13 @@ For every pair of inverse operations, verify symmetry:
 - admin update: only config changes, runtime state preserved
 For each pair, check: (a) rounding direction, (b) state consistency, (c) oracle consistency, (d) access control symmetry
 
-**Perspective 5 — The Consistency Checker**
+**Perspective 5 — The Bidirectional Admin Checker**
+For every admin/privileged function that affects user funds or state, analyze BOTH directions:
+- **Direction 1 — Admin harms users:** Can admin confiscate funds, lock positions, retroactively change terms, or brick user operations?
+- **Direction 2 — Users grief admin:** Can users block admin cleanup, prevent pool closure, or make admin operations revert?
+Both directions must be checked. Finding one does NOT mean the other doesn't exist. A close/reclaim function that checks `counter == 0` may be griefable by users (Direction 2) AND may confiscate from passive users whose entitlement isn't tracked by the counter (Direction 1).
+
+**Perspective 6 — The Consistency Checker**
 When a module uses an explicit safety pattern (e.g., `EDivideByZero` guard before division, bounds check on construction params, `assert!(amount > 0)` on inputs), check if sibling modules in the same package follow the same pattern. Inconsistencies are Low.
 - Grep for the pattern across all modules in the package
 - If Module A guards division with an explicit zero-check but Module B performing the same operation does not → flag the inconsistency
@@ -424,6 +430,16 @@ need to change, not by downstream effect:
 - "Cash not updated" reported as exchange rate issue vs liquidity check issue → SAME finding
 
 Keep only the highest-impact framing of each root cause.
+
+**Step 6 — Post-Confirmation Parallel Subsystem Check**
+
+After confirming any finding at Medium+ severity, check for parallel instances:
+1. Identify the root-cause function containing the bug
+2. Grep for ALL call sites of that function across the entire codebase
+3. For each call site that enters through a DIFFERENT subsystem (deposit vs borrow, token0 vs token1, pool A vs pool B, group 0 vs group 1): does the same bug manifest through this path?
+4. If yes → expand the finding to cover all affected subsystems or note the parallel instances explicitly
+
+This is mandatory because bugs in shared logic affect ALL consumers, not just the first path discovered.
 
 **Evidence Audit (mandatory):** For every non-trivial finding, include a short evidence
 table from `verification-policy.md` showing each decisive claim and its source tag.
