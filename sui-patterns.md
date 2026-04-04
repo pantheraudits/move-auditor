@@ -192,6 +192,7 @@ Epoch boundaries can be predicted. Flash loan attacks can be constructed around 
 2. Logic at epoch boundaries (staking rewards, interest accrual) must handle the exact boundary case
 3. Avoid `clock::timestamp_ms() == exact_value` checks — always use ranges
 4. Flag any "last second" scenarios where timestamp manipulation gives economic benefit
+5. **`epoch_timestamp_ms()` is NOT current time.** `tx_context::epoch_timestamp_ms(ctx)` returns the timestamp of when the current epoch started — it can be up to ~24h stale. Any protocol using it for time-sensitive logic (expiry checks, price freshness, liquidation windows, lock durations) instead of `clock::timestamp_ms(clock)` is using a stale value. Grep for `epoch_timestamp_ms` and verify it is never used where current time is needed — always use `sui::clock::Clock` for real-time timestamps
 
 ---
 
