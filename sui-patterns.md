@@ -1430,6 +1430,54 @@ public entry fun mint_random_nft(r: &Random, ctx: &mut TxContext) {
 
 ---
 
+## SUI-44 — `swap_remove` Silent Index Reordering
+
+**Description:** `table_vec::swap_remove` and `vector::swap_remove` delete an element at index `i` by swapping it with the last element and popping the end. This is O(1) — no shifting — but it **silently changes the position of the last element** without any abort or warning. If contract logic assigns meaning to index positions (insertion order, priority, rank, queue position), `swap_remove` corrupts that ordering.
+
+**Pattern:**
+```move
+// VULNERABLE — contract logic depends on insertion order
+struct DepositQueue has key {
+    id: UID,
+    depositors: TableVec<address>,  // "first 3 depositors get bonus"
+}
+
+public entry fun remove_depositor(queue: &mut DepositQueue, index: u64) {
+    table_vec::swap_remove(&mut queue.depositors, index);
+    // If index 1 removed from [alice, bob, charlie, dave, eve]:
+    //   eve moves to index 1 → [alice, eve, charlie, dave]
+    //   eve now qualifies for "first 3" bonus she shouldn't get
+    //   bob lost his position silently
+}
+
+// VULNERABLE — withdrawal processing assumes FIFO order
+public fun process_next_withdrawal(queue: &mut WithdrawQueue): address {
+    let next = *table_vec::borrow(&queue.pending, 0);
+    table_vec::swap_remove(&mut queue.pending, 0);
+    // Last element jumped to front — FIFO order broken
+    next
+}
+
+// SAFE — order doesn't matter, just membership
+struct Whitelist has key {
+    id: UID,
+    addresses: TableVec<address>,  // bag of addresses, no ordering semantics
+}
+
+public entry fun remove_from_whitelist(list: &mut Whitelist, index: u64) {
+    table_vec::swap_remove(&mut list.addresses, index);  // fine — order is irrelevant
+}
+```
+
+**Check:**
+1. Grep for `swap_remove` in all modules — both `table_vec::swap_remove` and `vector::swap_remove`
+2. For each usage: does the containing data structure have **index-dependent semantics**? (queues, priority lists, ranked depositors, ordered processing, "first N get X" logic)
+3. If index order carries meaning → flag as Medium (silent logic corruption) or High (if it affects fund distribution or priority)
+4. If the data structure is used as a set/bag where order is irrelevant → safe, no finding
+5. Rule of thumb: if you'd be fine storing it in a hash set, `swap_remove` is safe. If index position matters, it's a bug.
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -1475,3 +1523,4 @@ public entry fun mint_random_nft(r: &Random, ctx: &mut TxContext) {
 - [ ] NFT structs store only per-instance fields — collection constants belong in Display templates (SUI-41)
 - [ ] No dead migration functions in v1 (never-upgraded) packages (SUI-42)
 - [ ] No `tx_context::digest()`, `uid_to_bytes`, `epoch()`, or `epoch_timestamp_ms()` used as randomness — use `sui::random::Random` (SUI-43)
+- [ ] No `swap_remove` on index-ordered data structures — only safe for unordered bags/sets (SUI-44)
