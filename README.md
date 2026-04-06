@@ -6,7 +6,7 @@
 <p align="center">
   <a href="https://opensource.org/license/mit/"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome"></a>
-  <img src="https://img.shields.io/badge/version-3.5.0-blue.svg" alt="Version 3.5.0">
+  <img src="https://img.shields.io/badge/version-3.6.1-blue.svg" alt="Version 3.6.1">
   <img src="https://img.shields.io/badge/patterns-180%2B-red.svg" alt="180+ Patterns">
   <img src="https://img.shields.io/badge/chains-Sui%20%7C%20Aptos-purple.svg" alt="Sui | Aptos">
 </p>
@@ -92,7 +92,8 @@ The skill runs an **8-phase pipeline** on every audit:
 ```
 Phase 1  Detect chain, map codebase, classify entry points, build coverage plan
      |
-Phase 2  Multi-perspective review (Attacker, Designer, Integrator, Symmetry, Consistency)
+Phase 2  Multi-perspective review (Attacker, Designer, Integrator, Symmetry,
+         Bidirectional Admin, Consistency)
      |
 Phase 3  Structured vulnerability scan — every check in every loaded reference file
      |
@@ -118,8 +119,8 @@ detected chain and protocol type, keeping the context window lean.
 | Category | File | Patterns |
 |----------|------|----------|
 | Chain-agnostic | `common-move.md` | Access control, arithmetic, resource safety, logic, input validation, cross-module, upgradeability, build/test analysis |
-| Sui-specific | `sui-patterns.md` | SUI-01 to SUI-42 |
-| Aptos-specific | `aptos-patterns.md` | APT-01 to APT-24 |
+| Sui-specific | `sui-patterns.md` | SUI-01 to SUI-44 |
+| Aptos-specific | `aptos-patterns.md` | APT-01 to APT-25 |
 | DeFi cross-cutting | `defi-vectors.md` | DEFI-01 to DEFI-10 |
 | Staking & yield | `defi/defi-staking.md` | DEFI-11 to DEFI-16 |
 | Oracles | `defi/defi-oracle.md` | DEFI-17 to DEFI-24 |
@@ -139,8 +140,8 @@ move-auditor/
 ├── SKILL.md                          # Orchestrator — 8-phase workflow, coverage routing
 │
 ├── common-move.md                    # Chain-agnostic checks + verification checklist
-├── sui-patterns.md                   # Sui-specific patterns (SUI-01 to SUI-42)
-├── aptos-patterns.md                 # Aptos-specific patterns (APT-01 to APT-24)
+├── sui-patterns.md                   # Sui-specific patterns (SUI-01 to SUI-44)
+├── aptos-patterns.md                 # Aptos-specific patterns (APT-01 to APT-25)
 │
 ├── checklist-router.md               # Signal-based coverage planner & file router
 ├── verification-policy.md            # Evidence hierarchy, feasibility gates, severity discipline
@@ -179,6 +180,7 @@ Bugs found by `move-auditor` have been accepted in production codebases and bug 
 
 | Context | Finding | Outcome |
 |---------|---------|---------|
+| [Current Finance](https://audits.sherlock.xyz/contests/current-finance) — Sherlock contest, Sui Move lending protocol | 1 High + 2 Medium confirmed findings: opposite-direction EMA/spot deviations creating unliquidatable positions, ADL using reserve-level instead of emode-group-level debt, deposit cap double-subtraction bypass. Identified with `move-auditor`, manually verified by [Panther](https://x.com/thepantherplus). | **#27 out of 170+ participants** |
 | [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [PR #263](https://github.com/OpenZeppelin/contracts-sui/pull/263) **Merged** |
 | Sui DeFi margin protocol (bug bounty, name withheld) | Missing post-trade health check in margin trading proxy — leveraged accounts can keep trading after becoming liquidatable, enabling value extraction to a second account and leaving bad debt for lenders | **Confirmed** (duplicate of prior report) |
 
@@ -193,6 +195,7 @@ The skill is [benchmarked](benchmarks/BENCHMARK.md) against baseline prompts (ra
 - **v2.3.0 → v3.0.0**: CurrenSui detection improved from 2/6 to 4/6 known bugs + 2 novel findings
 - **v3.4.0**: Anti-FP overhaul reduced false positive rate after [CurrenSui benchmark](benchmarks/BENCHMARK-currensui.md) revealed ~25% FP rate
 - **v3.5.0**: 16 new Sui patterns from design-level anti-pattern analysis
+- **v3.6.x**: Patterns validated against Current Finance contest — 1 High + 2 Medium confirmed, #27 placement
 
 ---
 
