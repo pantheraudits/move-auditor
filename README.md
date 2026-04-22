@@ -176,15 +176,18 @@ move-auditor/
 
 ## Real-World Impact
 
-Bugs found by `move-auditor` have been accepted in production codebases and bug bounty programs:
+Bugs found by `move-auditor` have been accepted into production codebases, contest leaderboards, and paid bug bounties. In every case the skill surfaced the *candidate* finding — a human auditor reproduced, narrowed, and wrote up the bug before submission.
 
 | Context | Finding | Outcome |
 |---------|---------|---------|
 | [Current Finance](https://audits.sherlock.xyz/contests/current-finance) — Sherlock contest, Sui Move lending protocol | 1 High + 2 Medium confirmed findings: opposite-direction EMA/spot deviations creating unliquidatable positions, ADL using reserve-level instead of emode-group-level debt, deposit cap double-subtraction bypass. Identified with `move-auditor`, manually verified by [Panther](https://x.com/thepantherplus). | **#27 out of 170+ participants** |
 | [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [PR #263](https://github.com/OpenZeppelin/contracts-sui/pull/263) **Merged** |
+| Aptos perps protocol (private bug bounty, name withheld) | Candidate High-severity finding (originally triaged as Critical, downgraded to High by the program) plus 1 confirmed Medium already paid. Additional High and Medium findings accepted as valid and in triage. Surfaced with `move-auditor`, reproduced and written up manually by [Panther](https://x.com/thepantherplus). | **20,000 USDC (1 High) + 1 Medium paid** — further awards pending triage |
 | Sui DeFi margin protocol (bug bounty, name withheld) | Missing post-trade health check in margin trading proxy — leveraged accounts can keep trading after becoming liquidatable, enabling value extraction to a second account and leaving bad debt for lenders | **Confirmed** (duplicate of prior report) |
 
 > The OpenZeppelin find was a unique result from [benchmarking](benchmarks/BENCHMARK-openzeppelin.md) — no other AI audit tool (MAIA, Raw Claude CLI) caught it.
+>
+> **How to read this table**: `move-auditor` is a *candidate generator*, not a proof system. Each row represents a bug a human auditor reproduced, triaged, and submitted. The skill narrows where to look; the auditor still does the reading, the PoC, and the write-up.
 
 ---
 
