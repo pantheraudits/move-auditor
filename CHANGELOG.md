@@ -11,6 +11,59 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.6.2] — 2026-04-27
+
+### Stale-package surface — Scallop incident class (SUI-23 strengthened, DEFI-88 added)
+
+Adds detection for the Sui "stale package" vulnerability class exposed by the April 2026
+Scallop incident (~150K SUI drained via a 17-month-old V2 package whose
+`spool_account.last_index` was never synced at creation, on a shared `Spool` object that
+had no `version` gate). Every previously-published Sui package is permanently callable;
+without per-function version assertions on shared objects, every old code path stays a
+live attack surface.
+
+**sui-patterns.md — SUI-23 rewritten and strengthened:**
+- Reframed from "upgrade compatibility" to **stale-package attack surface** — every
+  previous package version is forever callable on the same shared objects
+- Added Scallop incident as the canonical real-world example (tx
+  `6WNDjCX3W852hipq6yrHhpUaSFHSPWfTxuLKaQkgNfVL`)
+- Detection ritual now requires checking **read-only** functions (`&T`) too, not only
+  `&mut T` — old read paths feeding downstream math are also exploitable
+- New requirement: `CURRENT_VERSION` must have been *bumped* on every historical bug-fix
+  upgrade and `migrate` must be wired into the upgrade procedure — defining a migration
+  function and never invoking it leaves prior packages live
+- Treat `public(package)` the same as `public` for this check — old packages still expose
+  their original `public(package)` surface
+- Severity guidance added: missing field on funds-bearing shared object = Critical;
+  field exists but ≥1 unguarded mutable function = Critical; never-bumped version despite
+  shipped fixes = High
+
+**defi/defi-staking.md — new DEFI-88 (Uninitialized Account Index):**
+- Captures the Scallop exploit *mechanic*: per-user position structs with a `last_index` /
+  `reward_debt` / `last_reward_per_share` / `last_cumulative` checkpoint that is left at 0
+  in the constructor, so the first reward computation credits the user with the full
+  historical accumulator
+- Detection ritual: list all checkpoint field names, find every constructor returning the
+  position type, confirm the field is synced to the pool's *current* index, then trace the
+  call graph from constructor → reward-update path. Critical if reachable on the active
+  package version. Critical (Scallop scenario) if reachable on any *deprecated* package
+  version that has no SUI-23 gate.
+- MasterChef `reward_debt` convention explicitly flagged — must be initialized to
+  `stake × current_acc / PRECISION`, never 0
+- Cross-references SUI-23, DEFI-13, DEFI-15
+
+**Routing changes:**
+- `defi-vectors.md` staking detector extended to include `last_index`, `reward_debt`,
+  `last_reward_per_share`, `last_cumulative` keywords
+- `checklist-router.md` adds two new escalation rules: (1) Sui + any shared object →
+  mandatory SUI-23 stale-package detection ritual covering every historical package
+  version; (2) staking + any checkpoint field → mandatory DEFI-88 constructor sync
+  verification across all package versions
+- `SKILL.md` reference table updated with the expanded staking trigger keywords and
+  DEFI-88 in the staking range
+
+---
+
 ## [3.6.1] — 2026-04-03
 
 ### Audit methodology improvements — admin analysis, parallel subsystem checks, bit-shift safety

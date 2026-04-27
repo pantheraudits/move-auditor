@@ -265,6 +265,130 @@ public fun compound_and_withdraw<T>(vault: &mut Vault<T>, amount: u64, ctx: &mut
 
 ---
 
+## DEFI-88 — Uninitialized Account Index = Full Historical Reward Credit
+
+**Description:** Per-user position structs (`stake_account`, `spool_account`,
+`UserPosition`, `Stake`) typically store a checkpoint field — `last_index`,
+`reward_per_share_paid`, `last_reward_per_share`, `last_cumulative` — used to compute
+rewards as `points = stake × (current_index − last_index)`. If the constructor that
+creates a fresh account does **not** sync this checkpoint to the pool's *current*
+index and instead leaves it at `0` (Move's struct-field default for numerics), the
+first call to the reward-update path computes `current_index − 0 = full historical
+accumulator`. The user is credited with every reward distributed since the pool
+opened, even though they were not staked for any of it.
+
+The reward accumulator is monotonically increasing and grows for the entire life of
+the pool, so the longer the pool has run, the larger the impact. A pool whose
+`current_index` has grown to ~10⁹ over 20 months will credit a freshly-created
+account with **billions of times** its fair share.
+
+**Why this often goes undetected for years:** the active SDK / front-end almost
+always calls a setter (`set_last_index`, `sync_index`, `update_account`) immediately
+after creating the account, masking the bug. The vulnerability only surfaces when
+someone bypasses the SDK and calls the constructor + reward-claim path directly —
+which is exactly the threat model on Sui because all historical package versions
+remain executable forever (see SUI-23, Scallop incident).
+
+**Pattern:**
+```move
+// VULNERABLE — last_index defaults to 0; first reward computation
+// credits the account with the full historical accumulator
+public struct SpoolAccount has key, store {
+    id: UID,
+    spool_id: ID,
+    stake_amount: u64,
+    last_index: u128,   // defaults to 0
+    points: u128,
+}
+
+public fun new_account(spool: &Spool, ctx: &mut TxContext): SpoolAccount {
+    SpoolAccount {
+        id: object::new(ctx),
+        spool_id: object::id(spool),
+        stake_amount: 0,
+        last_index: 0,        // <— BUG: should be spool.current_index
+        points: 0,
+    }
+}
+
+public fun stake(spool: &mut Spool, account: &mut SpoolAccount, coin: Coin<X>) {
+    update_points(spool, account);  // reads (current_index − 0) = catastrophic
+    account.stake_amount = account.stake_amount + coin::value(&coin);
+    // ...
+}
+
+fun update_points(spool: &Spool, account: &mut SpoolAccount) {
+    let delta_index = spool.index - account.last_index;
+    let delta_points = (account.stake_amount as u128) * delta_index;
+    account.points = account.points + delta_points;
+    account.last_index = spool.index;
+}
+
+// SAFE — checkpoint is synced to the pool's current index at creation
+public fun new_account(spool: &Spool, ctx: &mut TxContext): SpoolAccount {
+    SpoolAccount {
+        id: object::new(ctx),
+        spool_id: object::id(spool),
+        stake_amount: 0,
+        last_index: spool.index,  // <— sync at construction
+        points: 0,
+    }
+}
+```
+
+**Detection ritual:**
+1. List every per-user position type that has a checkpoint field. Grep for field
+   names matching:
+   ```
+   last_index | last_cumulative | last_reward_per_share | reward_per_share_paid
+   | last_acc | last_update_index | last_checkpoint | reward_debt
+   ```
+   `reward_debt` is the MasterChef convention — it MUST be initialized to
+   `stake × current_acc / PRECISION` at deposit time, not 0.
+2. For each such type `P`, find every function that constructs it
+   (`new_*`, `open_*`, `create_*`, `init_*`, or any function returning `P`). Read
+   the field initializer. If the field is set to `0`, a literal, or `default()` —
+   and the corresponding pool field is non-zero — that is the bug.
+3. Trace every reward-update function (anything that computes
+   `current_index - account.last_index`, `pool.acc - account.reward_debt`,
+   etc.). If it can be reached by an account whose checkpoint has never been
+   synced, the unsynced delta is creditable as rewards.
+4. Map the call graph from every constructor to every reward-update function. If a
+   path exists where the account reaches `update_points` / `harvest` / `claim`
+   without first being synced to the pool's current index, flag as **Critical**.
+5. Cross-check **all historical package versions**, not just the active one. On
+   Sui, every old package is callable directly (SUI-23). A constructor that was
+   buggy in V1/V2 and fixed in V3 still drains funds if the old package's
+   constructor is callable on the live shared pool object. The combined
+   SUI-23 + DEFI-88 finding is the exact Scallop class.
+6. Sanity-check the math: at attack time, what does
+   `stake × (current_index − 0) / PRECISION` evaluate to relative to the rewards
+   pool size? If the result ≥ rewards pool balance, the protocol is drainable.
+
+**Severity guidance:**
+- Constructor leaves checkpoint at 0 AND a reward-claim path is reachable on the
+  same package version → **Critical** (full drain, no special preconditions).
+- Constructor leaves checkpoint at 0 but only the *deprecated* old package version
+  has the bug AND that old package is callable (no SUI-23 gate) → **Critical**
+  (this is the Scallop scenario).
+- Constructor leaves checkpoint at 0 but every reward path performs a defensive
+  sync before the first read → **Medium** (latent bug, defense-in-depth concern).
+
+**Cross-reference:**
+- SUI-23 — without a version gate, this bug stays exploitable on every old
+  package version even after a fix is shipped.
+- DEFI-13 — precision loss can mask or amplify the impact.
+- DEFI-15 — admin functions skipping `update_reward_index()` create a related but
+  distinct staleness class.
+- semantic-gap-checks.md — the broader pattern of "state field whose write is
+  conditional or skipped on creation".
+
+*Ref: Scallop incident, April 2026 — 150K SUI drained via 17-month-old V2 package
+where `spool_account.last_index` was never synced at creation. tx
+`6WNDjCX3W852hipq6yrHhpUaSFHSPWfTxuLKaQkgNfVL`.*
+
+---
+
 ## Staking Verification Checklist
 
 - [ ] First depositor attack mitigated — minimum dead shares burned or virtual reserves (DEFI-11)
@@ -273,3 +397,4 @@ public fun compound_and_withdraw<T>(vault: &mut Vault<T>, amount: u64, ctx: &mut
 - [ ] Minimum stake duration enforced via on-chain timestamp (DEFI-14)
 - [ ] Every function modifying reward rate or total staked calls `update_reward_index()` first (DEFI-15)
 - [ ] No stale cached balance values used after balance-modifying operations (DEFI-16)
+- [ ] Per-user position constructors sync `last_index` / `reward_debt` / equivalent checkpoint to the pool's **current** accumulator — never leave at 0; check **every historical package version**, not just the active one (DEFI-88, Scallop class)

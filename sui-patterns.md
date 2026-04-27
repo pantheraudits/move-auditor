@@ -704,51 +704,118 @@ public fun liquidate(position: &mut Position, pool: &mut dex_v1::Pool) {
 
 ---
 
-## SUI-23 — Shared Object Version Check (Upgrade Safety)
+## SUI-23 — Shared Object Version Check (Stale Package Surface)
 
-**Description:** Shared objects must carry a `version: u64` field so upgraded code can
-reject stale layouts. Without version gating, upgraded functions operate on objects
-with old field layouts, causing deserialization failures or silent data corruption.
+**Description:** On Sui, **every previously published package version remains fully
+executable on-chain forever**. Publishing a new version does NOT remove or disable
+prior versions — it just adds a new one. Shared objects (`Pool`, `Spool`, `Vault`,
+`Market`, etc.) accept calls from any historical version of the package. Without a
+`version: u64` field on the shared object plus an
+`assert!(obj.version == CURRENT_VERSION, E_WRONG_VERSION)` check **at the top of every
+public/entry function that touches it**, every old package is a permanent attack
+surface — including all the bugs that were fixed in later upgrades.
+
+This is the **stale package class** of vulnerability. Bug-fix upgrades only deprecate
+the old code path if (a) the shared object carries a version field, (b) the post-fix
+code bumps `CURRENT_VERSION` and runs a migration that bumps `obj.version`, AND (c)
+**old** code paths assert against the same field. If any one of these is missing, the
+old buggy code stays callable directly (bypassing the SDK / front-end) and operates on
+the same shared object the new code uses.
+
+**Real-world exploit (Scallop, April 2026):** A deprecated V2 package from November
+2023 — unused for 17 months because the SDK had switched to V3 — was still callable.
+In V2's `spool_account` constructor, the per-account `last_index` checkpoint was never
+synced to the spool's current index (it defaulted to 0). The newer V3 package fixed
+the bug, but neither V2 nor V3 enforced a `version` assertion on the shared `Spool`.
+The attacker called the V2 path directly. With `last_index = 0`, the reward formula
+`points = stake × (current_index − last_index)` credited the attacker with the full
+20-month accumulator. ~150K SUI drained. Two compounding failures: (1) DEFI-88
+(uninitialized accumulator) in V2, (2) SUI-23 (no version gate on the shared object).
+Either fix alone would have prevented it.
 
 **Pattern:**
 ```move
-// VULNERABLE — shared object has no version field
-struct Pool has key {
+// VULNERABLE — shared object has no version field. Old package versions
+// remain callable forever and operate on the same shared state.
+public struct Spool has key {
     id: UID,
-    balance: Balance<SUI>,
-    fee_bps: u64,
+    index: u128,
+    total_staked: u64,
 }
 
-// After upgrade adds a new field, existing Pool objects lack it
-// borrow_global / dynamic access silently reads garbage or aborts
+public fun stake(spool: &mut Spool, /* ... */) { /* old/buggy logic */ }
 
 // SAFE — version-gated shared object
-const CURRENT_VERSION: u64 = 1;
+const CURRENT_VERSION: u64 = 2;
+const E_WRONG_VERSION: u64 = 1;
 
-struct Pool has key {
+public struct Spool has key {
     id: UID,
-    version: u64,
-    balance: Balance<SUI>,
-    fee_bps: u64,
+    version: u64,        // <— mandatory
+    index: u128,
+    total_staked: u64,
 }
 
-public fun swap(pool: &mut Pool, input: Coin<SUI>): Coin<USDC> {
-    assert!(pool.version == CURRENT_VERSION, E_WRONG_VERSION);
+public fun stake(spool: &mut Spool, /* ... */) {
+    assert!(spool.version == CURRENT_VERSION, E_WRONG_VERSION);
     // ...
 }
 
-// Migration function bumps version after upgrade
-public fun migrate_pool(pool: &mut Pool, cap: &AdminCap) {
-    assert!(pool.version == CURRENT_VERSION - 1, E_ALREADY_MIGRATED);
-    pool.version = CURRENT_VERSION;
+// Read-only functions also need the gate — old read paths can corrupt
+// downstream state if they return values the new logic no longer trusts
+public fun total_staked(spool: &Spool): u64 {
+    assert!(spool.version == CURRENT_VERSION, E_WRONG_VERSION);
+    spool.total_staked
+}
+
+// Migration must run as part of every upgrade — bumps the field and
+// thereby disables ALL prior package versions in one step
+entry fun migrate(spool: &mut Spool, _: &AdminCap) {
+    assert!(spool.version < CURRENT_VERSION, E_ALREADY_MIGRATED);
+    spool.version = CURRENT_VERSION;
 }
 ```
 
-**Check:**
-1. Every shared object struct must have a `version: u64` field
-2. Every `public` function taking `&mut SharedObj` must assert `obj.version == CURRENT_VERSION`
-3. A migration function must exist to bump versions post-upgrade
-4. Cross-ref: SUI-22 (dependency upgrade trap)
+**Detection ritual (run during Phase 2 mapping):**
+1. List every type stored as a shared object — grep for `transfer::share_object(`,
+   `public_share_object(`, and structs with `has key` that are constructed inside
+   `init`. Build a list `SHARED = {Spool, Pool, Market, Vault, ...}`.
+2. For each `T` in `SHARED`, grep the struct definition and confirm a `version: u64`
+   (or named alias like `pkg_version`, `obj_version`) field exists. **Missing field
+   on any shared object → finding (Critical).**
+3. For each `T` in `SHARED`, grep every function signature containing `&T` or `&mut T`:
+   ```
+   grep -nE "fun [A-Za-z_]+\([^)]*&\s*(mut\s+)?T\b"
+   ```
+   Each match is a public-attack-surface entry. Confirm the function body contains
+   `assert!(<param>.version == CURRENT_VERSION` (or equivalent constant) **before any
+   state read or write**. Any missed function = finding (Critical for `&mut`,
+   High for `&` if the return value feeds into protocol math/oracles, Medium otherwise).
+4. Confirm a migration function exists, is `AdminCap`-gated, asserts the prior version,
+   bumps to `CURRENT_VERSION`, and is **wired into the upgrade procedure** (not just
+   defined). A migration function that's never invoked after an upgrade is dead code
+   and the version field stays stale → old packages remain callable.
+5. Confirm `CURRENT_VERSION` was actually **incremented** in any historical bug-fix
+   upgrade. A protocol that ships a fix without bumping the version has not
+   deprecated the buggy old package — it has just added a second valid path.
+6. Re-check `public(package)` functions: PTB callers can compose them via friend
+   modules in the same package, but old packages still expose their original
+   `public(package)` surface. Treat `public(package)` the same as `public` for this
+   check.
+7. Cross-ref: SUI-22 (dependency upgrade trap), DEFI-88 (uninitialized accumulator),
+   SUI-27 (UpgradeCap lifecycle — required to ship bug-fix upgrades at all).
+
+**Severity guidance:**
+- Missing `version` field on a shared object that holds funds or accounting state →
+  **Critical** (every prior package is a live drain path).
+- Field exists but ≥1 public function lacks the assertion → **Critical** if the
+  unguarded function mutates funds/accounting; **High** if it returns values used by
+  other protocols; **Medium** for pure metadata reads.
+- Field + assertions present but no migration / version never bumped historically
+  despite shipped bug fixes → **High** (the gate is unused).
+
+*Refs: [Scallop incident post-mortem (Apr 2026, tx 6WNDjCX3W852hipq6yrHhpUaSFHSPWfTxuLKaQkgNfVL)],
+[Sui upgrade docs — package immutability], SUI-22, DEFI-88.*
 
 ---
 
@@ -1503,7 +1570,7 @@ public entry fun remove_from_whitelist(list: &mut Whitelist, index: u64) {
 - [ ] Flash loan receipts validated against originating pool before repayment (SUI-20)
 - [ ] No false-positive denylist findings — enforcement is validator-level, not Move code; check epoch gap for receiving (SUI-21)
 - [ ] All external dependencies checked for upgradeability — immutable protocol + upgradeable dep = bricking risk (SUI-22)
-- [ ] All shared objects have `version: u64` field; all public functions assert version (SUI-23)
+- [ ] All shared objects have `version: u64` field; **every** `public`/`public(package)`/`entry` function taking `&T` or `&mut T` asserts `version == CURRENT_VERSION`; migration is wired into upgrades and `CURRENT_VERSION` was bumped on every historical bug-fix upgrade — old packages must be deprecated, not just shadowed (SUI-23, Scallop class)
 - [ ] `Publisher` object transferred to governance or burned post-init (SUI-24)
 - [ ] All dynamic fields removed before `object::delete(uid)` — no orphaned balances (SUI-25)
 - [ ] `KioskOwnerCap` stored securely; `TransferPolicy` rules enforced on every extraction (SUI-26)

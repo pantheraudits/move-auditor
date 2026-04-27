@@ -13,7 +13,7 @@ files may apply** — a lending protocol typically needs lending + liquidation +
 
 | Subcategory | Detect when code contains... | Load file |
 |-------------|------------------------------|-----------|
-| Staking/Yield | `stake`, `unstake`, `reward_per_share`, `reward_per_token`, `accumulator`, `farming` | `defi/defi-staking.md` |
+| Staking/Yield | `stake`, `unstake`, `reward_per_share`, `reward_per_token`, `accumulator`, `farming`, `last_index`, `reward_debt`, `last_reward_per_share`, `last_cumulative` | `defi/defi-staking.md` |
 | Oracle | `get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`, `price_info` | `defi/defi-oracle.md` |
 | Lending/Borrowing | `borrow`, `repay`, `collateral`, `health_factor`, `loan`, `debt` | `defi/defi-lending.md` |
 | Math/Precision | Complex fee/share/interest math, `PRECISION`, `DECIMAL`, `RAY`, `WAD` | `defi/defi-math-precision.md` |
@@ -263,6 +263,7 @@ public entry fun swap(
 
 **Subcategory-specific (check when loaded):**
 - [ ] Staking: Flash deposit/withdraw griefing mitigated (DEFI-14)
+- [ ] Staking: Per-account `last_index` / `reward_debt` synced to current pool index at construction — never defaults to 0; verified across **all historical package versions**, not just the current one (DEFI-88, Scallop class)
 - [ ] Oracle: Different staleness thresholds per feed (DEFI-18)
 - [ ] Oracle: Depeg scenarios handled for wrapped assets (DEFI-21)
 - [ ] Lending: Pause mechanism is symmetric (repay ↔ liquidate) (DEFI-28)

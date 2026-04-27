@@ -19,12 +19,12 @@ The skill lives in `move-auditor/` and is installed by copying that directory to
 3. **Aptos-specific checks** go in `move-auditor/aptos-patterns.md` — numbered `APT-XX`
 4. **DeFi cross-cutting checks** go in `move-auditor/defi-vectors.md` — DEFI-01 to DEFI-10
 5. **DeFi subcategory checks** go in `move-auditor/defi/defi-<category>.md` — DEFI-11+
-   - `defi-staking.md` (DEFI-11–16), `defi-oracle.md` (DEFI-17–24)
+   - `defi-staking.md` (DEFI-11–16, DEFI-88), `defi-oracle.md` (DEFI-17–24)
    - `defi-lending.md` (DEFI-25–34), `defi-math-precision.md` (DEFI-35–42)
    - `defi-slippage.md` (DEFI-43–49), `defi-liquidation.md` (DEFI-50–66)
    - `defi-auction-clm.md` (DEFI-67–73), `defi-signatures.md` (DEFI-74–79)
    - `defi-lending-design-patterns.md` (DESIGN-L1–L4, known-good patterns)
-   - Next available ID: **DEFI-88**
+   - Next available ID: **DEFI-89**
 6. **Anti-FP / verification files** are at top-level:
    - `move-fp-catalog.md` — Always loaded; FP patterns and rationalizations to reject
    - `evidence-chains.md` — Phase 7; structured evidence templates

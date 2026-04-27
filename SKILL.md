@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.6.1"
+  version: "3.6.2"
   author: pantheraudits
   category: security
   tags:
@@ -58,7 +58,7 @@ file in this skill's directory (e.g., if SKILL.md is at
 | `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-25 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
 | `semantic-gap-checks.md` | When the protocol has accumulators, checkpoints, rewards, lending state, cross-module accounting, or multi-step state transitions |
-| `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`) — DEFI-11 to DEFI-16 |
+| `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`, `last_index`, `reward_debt`, `last_reward_per_share`) — DEFI-11 to DEFI-16, DEFI-88 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
 | `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
 | `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, `float`, `Decimal`, `WAD`, fee/share math) OR when reward/accumulator/liquidity_mining patterns detected — DEFI-35 to DEFI-42, DEFI-85 to DEFI-87 |
