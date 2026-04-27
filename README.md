@@ -184,6 +184,7 @@ Bugs found by `move-auditor` have been accepted into production codebases, conte
 | [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [PR #263](https://github.com/OpenZeppelin/contracts-sui/pull/263) **Merged** |
 | Aptos perps protocol (private bug bounty, name withheld) | Candidate High-severity finding (originally triaged as Critical, downgraded to High by the program) plus 1 confirmed Medium already paid. Additional High and Medium findings accepted as valid and in triage. Surfaced with `move-auditor`, reproduced and written up manually by [Panther](https://x.com/thepantherplus). | **20,000 USDC (1 High) + 1 Medium paid** — further awards pending triage |
 | Sui DeFi margin protocol (bug bounty, name withheld) | Missing post-trade health check in margin trading proxy — leveraged accounts can keep trading after becoming liquidatable, enabling value extraction to a second account and leaving bad debt for lenders | **Confirmed** (duplicate of prior report) |
+| Multiple Sui & Aptos protocols (bug bounties, names withheld) | Several additional findings across Sui and Aptos programs surfaced by `move-auditor` and manually reproduced and written up by [Panther](https://x.com/thepantherplus) | **In triage** — awards pending |
 
 > The OpenZeppelin find was a unique result from [benchmarking](benchmarks/BENCHMARK-openzeppelin.md) — no other AI audit tool (MAIA, Raw Claude CLI) caught it.
 >
