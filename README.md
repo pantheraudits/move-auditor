@@ -1,12 +1,12 @@
 <p align="center">
   <strong>move-auditor</strong><br>
-  <em>Claude Code skill for Move smart contract security auditing</em>
+  <em>Codex and Claude Code skill for Move smart contract security auditing</em>
 </p>
 
 <p align="center">
   <a href="https://opensource.org/license/mit/"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome"></a>
-  <img src="https://img.shields.io/badge/version-3.6.1-blue.svg" alt="Version 3.6.1">
+  <img src="https://img.shields.io/badge/version-3.6.2-blue.svg" alt="Version 3.6.2">
   <img src="https://img.shields.io/badge/patterns-180%2B-red.svg" alt="180+ Patterns">
   <img src="https://img.shields.io/badge/chains-Sui%20%7C%20Aptos-purple.svg" alt="Sui | Aptos">
 </p>
@@ -17,7 +17,7 @@
 
 ---
 
-A skill you plug into [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that turns it into a Move (Sui & Aptos) smart contract security auditor — battle-tested vulnerability patterns drawn from real-world exploits, ready to hunt bugs the moment you open a `.move` file.
+A portable skill for Codex and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that turns your AI coding agent into a Move (Sui & Aptos) smart contract security auditor — battle-tested vulnerability patterns drawn from real-world exploits, ready to hunt bugs the moment you open a `.move` file.
 
 **Read the full write-up:** [The Move Auditor — Blog Post](https://pantheraudits.com/blog/the-move-auditor.html)
 
@@ -39,15 +39,37 @@ A skill you plug into [Claude Code](https://docs.anthropic.com/en/docs/claude-co
 
 ## Install
 
+### Codex
+
+```bash
+git clone https://github.com/pantheraudits/move-auditor.git
+mkdir -p ~/.codex/skills
+cp -r move-auditor ~/.codex/skills/move-auditor
+```
+
+Restart Codex after installing or updating so it reloads the skill index.
+
+**Update to latest:**
+```bash
+cd move-auditor && git pull
+rm -rf ~/.codex/skills/move-auditor
+cp -r . ~/.codex/skills/move-auditor
+```
+
+### Claude Code
+
 ```bash
 git clone https://github.com/pantheraudits/move-auditor.git
 mkdir -p ~/.claude/commands
 cp -r move-auditor ~/.claude/commands/move-auditor
 ```
 
+Restart Claude Code after installing or updating so it reloads the command.
+
 **Update to latest:**
 ```bash
 cd move-auditor && git pull
+rm -rf ~/.claude/commands/move-auditor
 cp -r . ~/.claude/commands/move-auditor
 ```
 
@@ -55,10 +77,32 @@ cp -r . ~/.claude/commands/move-auditor
 
 ## Usage
 
+### Codex
+
+```bash
+# 1. Navigate to your Move project
+cd /path/to/your-move-project
+
+# 2. Start Codex
+codex
+```
+
+Then ask Codex:
+
+```text
+Use $move-auditor to audit this Move codebase.
+```
+
+You can also ask naturally, for example:
+
+```text
+Audit this Sui Move package for exploitable security issues.
+```
+
+### Claude Code
+
 > `/move-auditor` is a slash command inside Claude Code — not a terminal command.
 > Run it from within a Claude Code session.
-
-### Quick start
 
 ```bash
 # 1. Navigate to your Move project

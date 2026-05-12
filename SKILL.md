@@ -42,9 +42,9 @@ When activated, immediately begin **Phase 1** without waiting for instructions.
 
 All reference files are in the **same directory as this SKILL.md**.
 When the instructions below say "read `filename.md`", use the Read tool on the
-file in this skill's directory (e.g., if SKILL.md is at
-`~/.claude/commands/move-auditor/SKILL.md`, read
-`~/.claude/commands/move-auditor/common-move.md`).
+file in this skill's directory (for Codex this is typically
+`~/.codex/skills/move-auditor/`; for Claude Code this is typically
+`~/.claude/commands/move-auditor/`).
 
 | File | When to load |
 |------|-------------|

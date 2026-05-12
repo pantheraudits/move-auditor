@@ -1,0 +1,7 @@
+interface:
+  display_name: "Move Auditor"
+  short_description: "Audit Sui and Aptos Move contracts"
+  default_prompt: "Use $move-auditor to audit this Move codebase for exploitable Sui or Aptos security issues."
+
+policy:
+  allow_implicit_invocation: true

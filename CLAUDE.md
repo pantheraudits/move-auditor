@@ -1,14 +1,16 @@
 # CLAUDE.md
 
-Instructions for Claude when working inside the `move-auditor` repository.
+Instructions for Claude Code when working inside the `move-auditor` repository.
+Codex uses the equivalent instructions in `AGENTS.md`.
 
 ---
 
 ## What this repo is
 
-This is a Claude Code skill for auditing Move smart contracts on Sui and Aptos.
-The skill lives in `move-auditor/` and is installed by copying that directory to
-`~/.claude/commands/move-auditor`.
+This is a Claude Code and Codex skill for auditing Move smart contracts on Sui
+and Aptos. Claude Code users install it by copying this directory to
+`~/.claude/commands/move-auditor`; Codex users install it to
+`~/.codex/skills/move-auditor`.
 
 ---
 
