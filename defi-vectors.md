@@ -244,6 +244,30 @@ public entry fun swap(
 3. Token supply consistency: minting on destination must match burning on source
 4. Validator set changes: how is the validator set updated? Can a compromised validator set update itself?
 5. Finality assumptions: how many confirmations before a bridge event is considered final?
+6. **Recipient semantic mismatch:** for every source-chain payload field named `recipient`, `sui_recipient`, `account`, `account_id`, `owner`, or similar, prove the source chain, docs/frontend, and Move destination interpret the bytes as the same identity type. On Sui, distinguish a wallet `address` from an object/account `ID` converted through `object::id_from_address`. If the source chain accepts arbitrary nonzero bytes, locks/burns funds, and the Move side later aborts because the ID/account/object does not exist, report user-fund lock.
+7. **Abort-after-finality lock:** if source-chain escrow/burn/finalization happens before destination Move validation, identify every destination abort (`EAccountNotFound`, unsupported type, invalid route, denylist/receiving restrictions, missing policy) that can make a valid message permanently unclaimable. Check whether there is a refund/recovery path.
+
+**Recipient-semantic audit pattern:**
+
+```text
+EVM/source: deposit(token, amount, bytes32 suiRecipient)
+  - only checks suiRecipient != 0
+  - locks/transfers source asset before publishing message
+
+Move destination: redeem_vaa parses sui_recipient: address
+  - converts with object::id_from_address(sui_recipient)
+  - calls account_registry.request_deposit(account_id, coin, ...)
+  - request_deposit aborts if !has_account(account_id)
+
+Bug: docs/UI tell users to pass a Sui wallet address, but Move requires a WXA/account object ID. The source asset is locked and the valid VAA can never credit the destination account.
+```
+
+**Evidence required before reporting:**
+- Source chain actually locks/burns funds before destination validation
+- Destination validates existence/type/policy of the decoded recipient and can abort
+- The payload cannot be edited/replayed with a corrected recipient
+- No trustless refund/rescue path exists
+- The mismatch is not only a UI typo: either docs/frontends expose the wrong semantic, or the contract/API name strongly implies the wrong identity type
 
 ---
 
@@ -260,6 +284,7 @@ public entry fun swap(
 - [ ] Interest rate model has maximum cap and no overflow
 - [ ] Governance has timelock
 - [ ] Bridge messages have replay protection
+- [ ] Bridge recipient semantics match across source docs/API and Move destination; no source-finalized deposit can abort permanently on destination (DEFI-10)
 
 **Subcategory-specific (check when loaded):**
 - [ ] Staking: Flash deposit/withdraw griefing mitigated (DEFI-14)

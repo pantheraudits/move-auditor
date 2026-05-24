@@ -48,6 +48,7 @@ Load these files when entering Phase 7 — Verify & Triage:
 | `reward_per_share`, `accumulator`, `claim`, `stake`, `unstake`, `reward_manager`, `pool_reward`, `liquidity_mining`, `total_rewards` | `defi/defi-staking.md`, `defi/defi-math-precision.md`, `semantic-gap-checks.md` | checkpoint/accumulator review + **mandatory DEFI-85/86 fixed-point overflow check** |
 | `swap`, `pool`, `lp`, `min_amount_out`, `slippage` | `defi/defi-slippage.md` | PTB / multi-hop review |
 | `ed25519`, `secp256k1`, `verify_signature`, `nonce` | `defi/defi-signatures.md` | replay / domain separation review |
+| `bridge`, `wormhole`, `vaa`, `emitter`, `chain_id`, `cross-chain`, `recipient`, `payload`, `DepositRequest`, `WithdrawRequest` | `defi-vectors.md` | DEFI-10 bridge message / recipient-semantic review |
 
 ## Feature Flags
 
