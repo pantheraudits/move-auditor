@@ -1,8 +1,8 @@
-# DeFi Lending Vulnerability Patterns (DEFI-25 to DEFI-34)
+# DeFi Lending Vulnerability Patterns (DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-88, DEFI-90)
 
 Deep-dive reference for auditing Move lending protocols on Sui and Aptos.
 Load when code contains `borrow`, `repay`, `collateral`, `health_factor`,
-`loan`, or `debt`.
+`loan`, `debt`, `limiter`, `rate_limit`, or `outflow`.
 
 ---
 
@@ -582,6 +582,111 @@ public fun place_order<B, Q>(
 
 ---
 
+## DEFI-90 — Rolling Net-Outflow Limiter Only Reduces Current Segment
+
+**Description:** Rolling outflow caps are often implemented as a vector of time
+segments. This is safe only if inflows that economically undo an outflow reduce the
+same live usage that is still counted by the rolling window. If `add_outflow()` writes
+to the segment for the outflow timestamp, `count_current_outflow()` sums all live
+segments, but `reduce_outflow()` subtracts only from the segment for the current
+timestamp, then a cross-segment unwind can be silently discarded.
+
+Impact is a borrow/withdraw griefing DoS: an attacker can consume the cap near a
+segment boundary, repay/redeposit after rollover, and leave the old segment charged
+until expiry even though liquidity and debt state returned to normal.
+
+**Pattern:**
+```move
+// VULNERABLE — outflow is recorded in one live segment, but reduction only
+// touches the current segment. A repayment after rollover misses the charge.
+public fun add_outflow(limiter: &mut Limiter, now: u64, value: u64) {
+    let timestamp_index = now / (limiter.segment_duration as u64);
+    let curr_index = timestamp_index % vector::length(&limiter.segments);
+    let curr_outflow = count_current_outflow(limiter, now);
+    assert!(curr_outflow + value <= limiter.limit, E_LIMIT);
+
+    let segment = vector::borrow_mut(&mut limiter.segments, curr_index);
+    if (segment.index != timestamp_index) {
+        segment.index = timestamp_index;
+        segment.value = 0;
+    };
+    segment.value = segment.value + value;
+}
+
+public fun reduce_outflow(limiter: &mut Limiter, now: u64, value: u64) {
+    let timestamp_index = now / (limiter.segment_duration as u64);
+    let curr_index = timestamp_index % vector::length(&limiter.segments);
+    let segment = vector::borrow_mut(&mut limiter.segments, curr_index);
+    if (segment.index != timestamp_index) {
+        segment.index = timestamp_index;
+        segment.value = 0;
+    };
+    segment.value = if (segment.value <= value) 0 else segment.value - value;
+}
+```
+
+```move
+// SAFE — reduction is applied to still-live segments, so a later inflow can
+// unwind an earlier outflow that remains inside the rolling window.
+public fun reduce_outflow(limiter: &mut Limiter, now: u64, value: u64) {
+    let timestamp_index = now / (limiter.segment_duration as u64);
+    let len = vector::length(&limiter.segments);
+    let mut remaining = value;
+    let mut i = 0;
+
+    while (i < len && remaining > 0) {
+        let idx = (timestamp_index + len - 1 - i) % len;
+        let segment = vector::borrow_mut(&mut limiter.segments, idx);
+        if (segment.index + len > timestamp_index) {
+            let dec = if (segment.value > remaining) remaining else segment.value;
+            segment.value = segment.value - dec;
+            remaining = remaining - dec;
+        };
+        i = i + 1;
+    };
+}
+```
+
+Alternative safe design: keep an explicit `net_outflow` field that is increased on
+outflow, decreased on repayment/redeposit/liquidation inflow, and adjusted when
+segments expire. Segments then serve only as expiry bookkeeping.
+
+**Check:**
+1. Search for segmented limiter signals: `Limiter`, `Segment`, `segments`, `bucket`,
+   `window`, `cycle_duration`, `segment_duration`, `outflow`, `inflow`,
+   `add_*limit`, `reduce_*limit`, `rate_limit`, `cap`.
+2. Decide whether the cap is intended to be net or gross. If there is any reducer
+   called from repayment, redeposit, liquidation, or return-of-liquidity paths, treat
+   it as net unless docs explicitly say historical gross outflow never gets restored.
+3. Trace the writer path (`borrow`, `withdraw`, `redeem`, `flash_loan`) and the
+   unwinder path (`repay`, `deposit`, `redeposit`, `liquidate`, `return_liquidity`).
+   Record which timestamp/segment each path mutates.
+4. Trace `count_current_outflow()` or equivalent. If it sums all live segments while
+   the reducer mutates only `now % len`, flag the cross-segment mismatch.
+5. Boundary test: with multiple segments, add `L` at `t = segment_duration - 1`,
+   reduce `L` at `t = segment_duration + 1`, then assert current usage is `0`.
+   If usage remains `L`, this is a finding.
+6. Cross-ref DEFI-84: admin updates must preserve limiter runtime state; preserving
+   state is not enough if the reducer nets against the wrong segment.
+
+**Severity:**
+- High if stale usage can block withdrawals, deleveraging, repayment-adjacent safety
+  actions, or all borrowing/withdrawal for a major asset during the full window.
+- Medium if it blocks new borrows/withdrawals for a bounded window but users can still
+  repay, add collateral, liquidate, and exit through other paths.
+- Low/Info if the cap is deliberately documented and implemented as a gross historical
+  outflow cap with no promise that inflows restore headroom.
+
+**False-positive guards:**
+- Do not report if `reduce_outflow()` walks active segments FIFO/LIFO and consumes the
+  outstanding reduction across live buckets.
+- Do not report if an explicit rolling `net_outflow` total is reduced on every inflow
+  and expired segment values are reconciled against that total.
+- Do not report if the limiter has a single segment equal to the whole window and
+  rollover cannot happen while the old segment is still counted.
+
+---
+
 ## Lending Verification Checklist
 
 - [ ] Liquidation threshold boundary: `<` vs `<=` matches the spec (DEFI-25)
@@ -598,3 +703,4 @@ public fun place_order<B, Q>(
 - [ ] Emergency mechanism entry and stop conditions read from the same source (DEFI-82)
 - [ ] Admin config updates do NOT overwrite embedded runtime state (limiters, accumulators, counters) (DEFI-84)
 - [ ] Margin trade proxy revalidates health ratio after every trade when debt exists (DEFI-88)
+- [ ] Rolling net-outflow limiters reduce live usage across segment rollover; boundary add/reduce test returns usage to zero (DEFI-90)

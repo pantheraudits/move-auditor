@@ -226,6 +226,64 @@ public fun wrap<T: key + store>(obj: T, min_delay_ms: u64, ctx: &mut TxContext):
 4. Verify a recovery path exists (unwrap, admin rescue, timeout fallback)
 5. Also check: missing public accessors for construction parameters — downstream protocols cannot programmatically validate the configured value
 
+### 2.8 Packed Field Mask Width Mismatch
+
+**Pattern:** Multiple counters, flags, enum values, or indices are packed into one integer and later extracted with `& MASK` / `>> SHIFT`. The extraction mask is narrower than the stored field's real value range. This is easy to miss when the maximum index fits in N bits, but the count of entries needs N+1 bits. Example: indices `0..15` fit in 4 bits, but an active-count value that can reach `16` requires 5 bits.
+
+**Risk:** The high bit is silently discarded on read. At exact power-of-two boundaries, a nonzero counter can decode as `0`, so predicates such as `is_empty`, `none_pending`, `all_clear`, `can_close`, or `can_withdraw` may make the opposite decision from the actual packed state. This can skip pending work, allow premature cleanup, block redemptions/claims, or corrupt accounting state.
+
+```move
+const ACTIVE_COUNT_SHIFT: u8 = 0;
+const ACTIVE_COUNT_MASK: u64 = 0x0f; // VULNERABLE: 4 bits, encodes only 0..15
+const ACTIVE_COUNT_STORAGE_MASK: u64 = 0xff; // field is stored as 8 bits
+const MAX_ACTIVE_BUCKETS: u8 = 16;
+const U64_MAX: u64 = 18446744073709551615;
+
+struct Meta has copy, drop, store {
+    bits: u64,
+}
+
+fun active_count(meta: &Meta): u8 {
+    (((meta.bits >> ACTIVE_COUNT_SHIFT) & ACTIVE_COUNT_MASK) as u8)
+}
+
+fun none_pending(meta: &Meta): bool {
+    active_count(meta) == 0
+}
+
+fun set_active_count(meta: &mut Meta, count: u8) {
+    assert!(count <= MAX_ACTIVE_BUCKETS, ECountTooLarge);
+    let shifted_mask = ACTIVE_COUNT_STORAGE_MASK << ACTIVE_COUNT_SHIFT;
+    let cleared = meta.bits & (U64_MAX ^ shifted_mask);
+    meta.bits = cleared | ((count as u64) << ACTIVE_COUNT_SHIFT);
+    // count == 16 stores bit 4, but active_count() masks it out and returns 0.
+}
+
+// SAFE: 5 bits encode 0..31, so the valid count range 0..16 round-trips.
+const ACTIVE_COUNT_BITS: u8 = 5;
+const ACTIVE_COUNT_MASK_SAFE: u64 = (1u64 << ACTIVE_COUNT_BITS) - 1;
+
+fun active_count_safe(meta: &Meta): u8 {
+    (((meta.bits >> ACTIVE_COUNT_SHIFT) & ACTIVE_COUNT_MASK_SAFE) as u8)
+}
+
+fun set_active_count_safe(meta: &mut Meta, count: u8) {
+    assert!(count <= MAX_ACTIVE_BUCKETS, ECountTooLarge);
+    let shifted_mask = ACTIVE_COUNT_MASK_SAFE << ACTIVE_COUNT_SHIFT;
+    let cleared = meta.bits & (U64_MAX ^ shifted_mask);
+    meta.bits = cleared | (((count as u64) & ACTIVE_COUNT_MASK_SAFE) << ACTIVE_COUNT_SHIFT);
+}
+```
+
+**Check:**
+1. Grep for packed-state signals: `MASK`, `_MASK`, `SHIFT`, `_SHIFT`, `BITS`, `bitmap`, `bitset`, `flags`, `packed`, `meta`, `bucket`, `slot`, `active_count`, plus bitwise operators `&`, `|`, `^`, `<<`, `>>`.
+2. For every getter using `(value >> shift) & mask`, derive the decoded width from the mask. A contiguous mask `0x0f` is 4 bits; `0x1f` is 5 bits. Non-contiguous masks require extra scrutiny.
+3. Trace every writer for that field and derive the true maximum stored value from constants, vector lengths, bucket counts, enum variants, and update guards.
+4. Distinguish **index max** from **count max**: 16 buckets have max index 15 but max active count 16.
+5. Test the boundary values explicitly: `0`, `1`, `max_index`, `max_count`, and any power of two (`8`, `16`, `32`) in range. The getter must round-trip each value.
+6. If a truncated getter feeds `== 0`, `!= 0`, `>= max`, close/cleanup eligibility, queue draining, claim/redemption processing, or liquidation/accounting gates, escalate at least to Medium unless the state is unreachable.
+7. Safe pattern: define `FIELD_BITS`, derive `FIELD_MASK = (1 << FIELD_BITS) - 1` where practical, assert writes fit the field, and include boundary tests for the maximum valid count.
+
 ---
 
 ## 3. Resource Safety
@@ -676,10 +734,27 @@ Scallop (flash loan fees trapped — High),
 SuiPad (unused tokens stuck in vault — High)*
 
 ### 9.4 Self-Transfer Snapshot Manipulation
-**Pattern:** User transfers tokens to themselves, triggering fee/reward snapshot updates without real economic activity.
-**Risk:** If fee collection or reward distribution logic fires on every transfer (including self-transfers), an attacker can manipulate accumulators, claim unearned rewards, or force fee distributions.
+**Pattern:** User transfers internally-accounted balances to themselves (`from == to`) and the transfer code either:
+1. Reads sender and receiver balances into snapshots before either write, then writes both slots back separately; or
+2. Triggers fee/reward snapshot updates without real economic activity.
+
+**Risk:** In stale-balance accounting, self-transfer can mint balance from nothing. In fee/reward logic, self-transfer can manipulate accumulators, claim unearned rewards, or force fee distributions.
+
+This check applies to internal ledgers (`Table<address, u64>`, `VecMap<address, u64>`, custom balance maps, indexed vectors). Do not report plain `Coin<T>` object transfers as this bug unless there is separate internal accounting, because Move's linear `Coin<T>` type prevents duplicating the coin object.
 
 ```move
+// VULNERABLE — stale snapshots overwrite the same balance slot on self-transfer
+public fun transfer_internal(ledger: &mut Ledger, from: address, to: address, amount: u64) {
+    let sender_bal = *table::borrow(&ledger.balances, from);
+    let receiver_bal = *table::borrow(&ledger.balances, to);
+    assert!(sender_bal >= amount, E_INSUFFICIENT_BALANCE);
+
+    *table::borrow_mut(&mut ledger.balances, from) = sender_bal - amount;
+    *table::borrow_mut(&mut ledger.balances, to) = receiver_bal + amount;
+    // If from == to and balance is 100, amount is 30:
+    // first write: 70, second write: 130. The subtraction is overwritten.
+}
+
 // VULNERABLE — transfer triggers reward snapshot, no self-transfer check
 public fun transfer(pool: &mut Pool, from: address, to: address, amount: u64) {
     update_reward_snapshot(pool, from);  // triggers on self-transfer too
@@ -687,16 +762,31 @@ public fun transfer(pool: &mut Pool, from: address, to: address, amount: u64) {
     move_tokens(pool, from, to, amount);
 }
 
-// SAFE — block self-transfers or skip snapshot on self-transfer
+// SAFE — block self-transfers before any balance writes or side effects
 public fun transfer(pool: &mut Pool, from: address, to: address, amount: u64) {
     assert!(from != to, E_SELF_TRANSFER);
     update_reward_snapshot(pool, from);
     update_reward_snapshot(pool, to);
     move_tokens(pool, from, to, amount);
 }
+
+// SAFE — or no-op self-transfers before touching accounting
+public fun transfer_internal(ledger: &mut Ledger, from: address, to: address, amount: u64) {
+    if (from == to) return;
+    let sender_bal = *table::borrow(&ledger.balances, from);
+    assert!(sender_bal >= amount, E_INSUFFICIENT_BALANCE);
+    let receiver_bal = *table::borrow(&ledger.balances, to);
+    *table::borrow_mut(&mut ledger.balances, from) = sender_bal - amount;
+    *table::borrow_mut(&mut ledger.balances, to) = receiver_bal + amount;
+}
 ```
 
-**Check:** Search for transfer/send functions. Does `from == to` trigger any side effects (rewards, fees, snapshots)?
+**Check:**
+1. Search for internal transfer/send functions with `from`/`to`, `sender`/`receiver`, `src`/`dst`, or `owner`/`recipient` address parameters.
+2. Look for two balance reads before writes: `sender_bal = balances[from]` and `receiver_bal = balances[to]`, followed by separate writes to both keys.
+3. If `from == to`, simulate with concrete numbers: balance 100, amount 30 should end at 100. If it ends at 130, report as minting / supply inflation.
+4. Check whether `assert!(from != to, ...)` or an early `if (from == to) return;` occurs before balance writes, events, fees, snapshots, and reward updates.
+5. If self-transfer is allowed intentionally, verify the code mutates one slot atomically or recomputes the second write from the updated balance, and does not emit reward/fee side effects twice.
 
 ### 9.5 Round-Trip Profitability
 **Pattern:** `deposit(X)` followed by immediate `withdraw(all)` returns more than X.
@@ -1184,6 +1274,7 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] All divisions guarded against zero denominator
 - [ ] No narrowing casts without bounds assertions
 - [ ] All bitwise operations checked for overflow/precision loss — Move does NOT auto-check these (2.5)
+- [ ] Packed counters/flags use masks wide enough for their maximum values; power-of-two boundary counts do not decode to zero (2.8)
 - [ ] All `move_from` calls preceded by ownership check
 - [ ] No timestamp dependencies exploitable in <30s window
 - [ ] All user inputs validated (zero checks, bounds checks)
@@ -1200,7 +1291,7 @@ Run through each item and mark ✅ (clean) or ❌ (finding):
 - [ ] Every claim/refund/withdraw updates state to prevent re-invocation (9.1)
 - [ ] No mixed scaled/unscaled values in arithmetic (9.2)
 - [ ] Every fee collection has a corresponding withdrawal function (9.3)
-- [ ] Self-transfers cannot manipulate reward/fee snapshots (9.4)
+- [ ] Self-transfers cannot mint via stale balance snapshots or manipulate reward/fee snapshots (9.4)
 - [ ] Round-trip `deposit→withdraw` never returns more than input (9.5)
 - [ ] No circular/recursive function call chains (10.1)
 - [ ] Stake/unstake cannot manipulate reward accumulators in same transaction (10.2)

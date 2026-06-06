@@ -279,6 +279,124 @@ public fun execute_once(
 
 ---
 
+## DEFI-89 — Signatures Verified Against Live Policy Instead of the Policy at Signing Time
+
+**Description:** When an authorization scheme verifies a set of signatures against
+**mutable on-chain policy state** — the signer set, the approval threshold, a quorum, an
+allowlist, a role table — but that policy can change between the moment signatures are
+collected off-chain and the moment they are submitted on-chain, the signatures are
+effectively re-interpreted under whatever policy is current at execution. The signed
+payload binds *what* is being authorized (amount, recipient, nonce) but not *which policy*
+the signatures were meant to satisfy.
+
+This creates a **stale partial-approval** problem: a request that was deliberately
+*not* executable when signatures were gathered (e.g. only 2 of a required 3 signers signed)
+can silently become executable later after a routine policy update (threshold lowered to 2,
+or the signer set narrowed) — even though no new approval for that specific request was ever
+collected under the new policy. It is the dual of DEFI-76 (missing params in the signed
+message): here the missing bound is the *verification policy itself*, not a call parameter.
+
+This is **not** the same as nonce replay (DEFI-74). The request may have a perfectly good
+per-request nonce and still be unused — the problem is that the threshold/signer-set the
+signatures are checked against is read from live, admin-mutable state rather than snapshotted
+into the signed message.
+
+**Pattern:**
+```move
+// VULNERABLE — threshold and signer set read from current (mutable) config,
+// not from the policy that existed when signatures were produced.
+public struct Config has key, store {
+    id: UID,
+    signers: vector<vector<u8>>,  // mutated by add_signer / remove_signer / reset_signers
+    threshold: u64,               // mutated by set_threshold
+    // ... no policy version / nonce
+}
+
+public fun withdraw(
+    config: &Config,
+    vault: &mut Vault,
+    amount: u64,
+    recipient: address,
+    request_nonce: u64,
+    signatures: vector<vector<u8>>,
+    ctx: &mut TxContext,
+) {
+    // Signed message binds the request, but NOT the policy it must satisfy:
+    let message = build_message(amount, recipient, request_nonce);
+
+    // Count is compared against the LIVE threshold and LIVE signer set:
+    assert!(signatures.length() >= config.threshold, EINVALID_SIGNATURES);
+    assert!(signatures.length() <= config.signers.length(), EINVALID_SIGNATURES);
+    let mut valid = 0; let mut i = 0;
+    while (i < config.signers.length()) {
+        if (verify(config.signers.borrow(i), &message, &signatures)) { valid = valid + 1; };
+        i = i + 1;
+    };
+    assert!(valid >= config.threshold, ETHRESHOLD_TOO_LOW); // <-- live threshold
+    release_funds(vault, amount, recipient);
+}
+// Attack: collect 2 of 3 required sigs -> request not yet submitted ->
+// owner routinely lowers threshold to 2 (or drops the 3rd signer) ->
+// old 2 sigs now satisfy the new policy -> funds released without new approval.
+
+// SAFE — bind the policy version into the signed message and require the caller
+// to assert it matches the current policy. Every signer/threshold mutation bumps it.
+public struct Config has key, store {
+    id: UID,
+    signers: vector<vector<u8>>,
+    threshold: u64,
+    signer_policy_nonce: u64,     // bumped in add_signer/remove_signer/reset_signers/set_threshold
+}
+
+public fun withdraw(
+    config: &Config,
+    vault: &mut Vault,
+    amount: u64,
+    recipient: address,
+    request_nonce: u64,
+    expected_policy_nonce: u64,
+    signatures: vector<vector<u8>>,
+    ctx: &mut TxContext,
+) {
+    // Reject signatures produced under a stale policy outright:
+    assert!(expected_policy_nonce == config.signer_policy_nonce, ESTALE_POLICY);
+    // Bind the policy version into the signed payload so sigs can't be re-interpreted:
+    let message = build_message(amount, recipient, request_nonce, config.signer_policy_nonce);
+    // ... threshold / signer checks as before
+}
+```
+
+**Check:**
+1. Find every authorization path that verifies signatures (or counts approvals) against
+   state read from a struct — grep the signer set / threshold / quorum / allowlist fields:
+   `threshold`, `signers`, `quorum`, `min_signatures`, `weight`, `approvers`, `guardians`,
+   `voting_power`, `role`, `whitelist`.
+2. For each such field, find all writers: `add_signer`, `remove_signer`, `reset_signers`,
+   `set_threshold`, `update_signers`, `rotate`, `set_quorum`, governance/admin setters.
+   If **any** writer exists, the policy is mutable.
+3. Now ask: **is the policy version bound into the signed message?** Trace the message
+   builder / hash (`build_message`, `keccak`, `hash::*`, `bcs::to_bytes`). If the message
+   does NOT include a policy nonce / version / snapshot, the signatures float against live
+   state → finding.
+4. Confirm the time gap is real: signatures are gathered off-chain (any multi-sig, gasless
+   relay, or off-chain quorum) and submitted in a separate transaction. A scheme where the
+   signers sign *and* execute in the same atomic step is not exposed.
+5. Severity: **High** when funds/privileged actions are released and a threshold reduction
+   or signer-set change can revive a sub-threshold request (loss of funds without fresh
+   approval); Medium if the action is reversible or non-financial.
+
+**Fix:** Add a monotonic `signer_policy_nonce` (or version) to the policy struct, increment
+it in **every** signer/threshold/quorum mutation, include it in the signed message, and
+require the caller to pass the expected nonce so stale-policy signatures are rejected. If a
+per-message policy version is infeasible, invalidate all outstanding authorizations on any
+policy change via a global authorization nonce that is also bound into the signed message.
+
+**Cross-ref:** DEFI-76 (missing params in signed message — same root class, different missing
+bound), DEFI-74 (nonce replay — distinct: a request can be unused yet still mis-validated here),
+DEFI-77 (no expiration — a deadline narrows but does not close this window).
+
+---
+
 ## Signature Verification Checklist
 
 - [ ] Every signature verification tracks and consumes a nonce (DEFI-74)
@@ -287,3 +405,4 @@ public fun execute_once(
 - [ ] Signatures include expiration deadline (DEFI-77)
 - [ ] Signature verification return value is asserted, never ignored (DEFI-78)
 - [ ] secp256k1 replay prevention uses message hash, not raw signature bytes (DEFI-79)
+- [ ] Signatures are bound to the signer-set/threshold policy version in effect when they were collected, not re-checked against live mutable policy state (DEFI-89)

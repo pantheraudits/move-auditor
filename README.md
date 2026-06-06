@@ -6,7 +6,7 @@
 <p align="center">
   <a href="https://opensource.org/license/mit/"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg" alt="Contributions Welcome"></a>
-  <img src="https://img.shields.io/badge/version-3.6.2-blue.svg" alt="Version 3.6.2">
+  <img src="https://img.shields.io/badge/version-3.10.0-blue.svg" alt="Version 3.10.0">
   <img src="https://img.shields.io/badge/patterns-180%2B-red.svg" alt="180+ Patterns">
   <img src="https://img.shields.io/badge/chains-Sui%20%7C%20Aptos-purple.svg" alt="Sui | Aptos">
 </p>
@@ -31,7 +31,7 @@ A portable skill for Codex and [Claude Code](https://docs.anthropic.com/en/docs/
 - **Anti-false-positive engine** — confidence gating, evidence chains, FP catalog, and self-hallucination checks
 - **Build & test log analysis** — catches arithmetic aborts, assertion failures, and `#[expected_failure]` anomalies
 - **Signal-based coverage routing** — detects protocol type and loads only relevant patterns
-- **DeFi deep-dive** — 87 patterns covering staking, oracles, lending, liquidation, slippage, auctions, and signatures
+- **DeFi deep-dive** — 90+ patterns covering staking, oracles, lending, liquidation, slippage, auctions, and signatures
 - **Semantic gap detection** — stale state, accumulator drift, cross-module accounting desync
 - **Real-world validated** — findings accepted into production codebases (see below)
 
@@ -163,17 +163,17 @@ detected chain and protocol type, keeping the context window lean.
 | Category | File | Patterns |
 |----------|------|----------|
 | Chain-agnostic | `common-move.md` | Access control, arithmetic, resource safety, logic, input validation, cross-module, upgradeability, build/test analysis |
-| Sui-specific | `sui-patterns.md` | SUI-01 to SUI-44 |
+| Sui-specific | `sui-patterns.md` | SUI-01 to SUI-45 |
 | Aptos-specific | `aptos-patterns.md` | APT-01 to APT-25 |
 | DeFi cross-cutting | `defi-vectors.md` | DEFI-01 to DEFI-10 |
 | Staking & yield | `defi/defi-staking.md` | DEFI-11 to DEFI-16 |
 | Oracles | `defi/defi-oracle.md` | DEFI-17 to DEFI-24 |
-| Lending & borrowing | `defi/defi-lending.md` | DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
+| Lending & borrowing | `defi/defi-lending.md` | DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90 |
 | Math & precision | `defi/defi-math-precision.md` | DEFI-35 to DEFI-42, DEFI-85 to DEFI-87 |
 | Slippage & MEV | `defi/defi-slippage.md` | DEFI-43 to DEFI-49 |
 | Liquidation | `defi/defi-liquidation.md` | DEFI-50 to DEFI-66, DEFI-81, DEFI-83 |
 | Auctions & CLM | `defi/defi-auction-clm.md` | DEFI-67 to DEFI-73 |
-| Signatures | `defi/defi-signatures.md` | DEFI-74 to DEFI-79 |
+| Signatures | `defi/defi-signatures.md` | DEFI-74 to DEFI-79, DEFI-89 |
 
 ---
 
@@ -184,7 +184,7 @@ move-auditor/
 ├── SKILL.md                          # Orchestrator — 8-phase workflow, coverage routing
 │
 ├── common-move.md                    # Chain-agnostic checks + verification checklist
-├── sui-patterns.md                   # Sui-specific patterns (SUI-01 to SUI-44)
+├── sui-patterns.md                   # Sui-specific patterns (SUI-01 to SUI-45)
 ├── aptos-patterns.md                 # Aptos-specific patterns (APT-01 to APT-25)
 │
 ├── checklist-router.md               # Signal-based coverage planner & file router
@@ -199,12 +199,12 @@ move-auditor/
 ├── defi/
 │   ├── defi-staking.md               # Staking/yield (DEFI-11 to DEFI-16)
 │   ├── defi-oracle.md                # Oracles (DEFI-17 to DEFI-24)
-│   ├── defi-lending.md               # Lending/borrowing (DEFI-25 to DEFI-34, 80, 82, 84)
+│   ├── defi-lending.md               # Lending/borrowing (DEFI-25 to DEFI-34, 80, 82, 84, 90)
 │   ├── defi-math-precision.md        # Math & precision (DEFI-35 to DEFI-42, 85-87)
 │   ├── defi-slippage.md              # Slippage & DEX (DEFI-43 to DEFI-49)
 │   ├── defi-liquidation.md           # Liquidation (DEFI-50 to DEFI-66, 81, 83)
 │   ├── defi-auction-clm.md           # Auctions & CLM (DEFI-67 to DEFI-73)
-│   ├── defi-signatures.md            # Signatures (DEFI-74 to DEFI-79)
+│   ├── defi-signatures.md            # Signatures (DEFI-74 to DEFI-79, DEFI-89)
 │   └── defi-lending-design-patterns.md  # Known-good patterns (DESIGN-L1 to L4)
 │
 ├── audit-prompts.md                  # Deep-dive prompts & vulnerability pattern pack
@@ -224,7 +224,7 @@ Bugs found by `move-auditor` have been accepted into production codebases, conte
 
 | Context | Finding | Outcome |
 |---------|---------|---------|
-| Aptos perps protocol (private bug bounty, name withheld) | Candidate High-severity finding (originally triaged as Critical, downgraded to High by the program) plus 1 confirmed Medium already paid. Additional High and Medium findings accepted as valid and in triage. Surfaced with `move-auditor`, reproduced and written up manually by [Panther](https://x.com/thepantherplus). | **20,000 USDC (1 High) + 1 Medium paid** — further awards pending triage |
+| Aptos perps protocol (private bug bounty, name withheld) | 1 High and 2 Medium findings accepted across private bounty reviews. Details withheld under program confidentiality; each candidate was surfaced with `move-auditor`, then reproduced, narrowed, and written up manually by [Panther](https://x.com/thepantherplus). | **24,000 USDC total accepted rewards** — 1 High + 2 Medium; private details withheld |
 | [Current Finance](https://audits.sherlock.xyz/contests/current-finance) — Sherlock contest, Sui Move lending protocol | 1 High + 2 Medium confirmed findings: opposite-direction EMA/spot deviations creating unliquidatable positions, ADL using reserve-level instead of emode-group-level debt, deposit cap double-subtraction bypass. Identified with `move-auditor`, manually verified by [Panther](https://x.com/thepantherplus). | **#27 out of 170+ participants** |
 | [OpenZeppelin Contracts for Sui](https://github.com/OpenZeppelin/contracts-sui) | Missing `EDivideByZero` guard in fixed-point `div`/`mod` — relied on opaque VM abort instead of descriptive error | [PR #263](https://github.com/OpenZeppelin/contracts-sui/pull/263) **Merged** |
 | Sui DeFi margin protocol (bug bounty, name withheld) | Missing post-trade health check in margin trading proxy — leveraged accounts can keep trading after becoming liquidatable, enabling value extraction to a second account and leaving bad debt for lenders | **Confirmed** (duplicate of prior report) |

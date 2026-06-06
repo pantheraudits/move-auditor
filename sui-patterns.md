@@ -1546,6 +1546,82 @@ public entry fun remove_from_whitelist(list: &mut Whitelist, index: u64) {
 
 ---
 
+## SUI-45 — Unbounded Inline Collection Grows Object Past `max_move_object_size`
+
+**Description:** A `vector<T>` (and likewise `VecMap`/`VecSet`, which are vectors internally)
+declared as a field of a `has key` struct is stored **inline** in the object's BCS-serialized
+bytes. Every element appended grows the parent object's on-chain size monotonically:
+`O(n × sizeof(T))`. Sui enforces a hard per-object size limit — `max_move_object_size`,
+currently ~256,000 bytes on mainnet (historically 250KB). Once the object reaches that cap,
+**any** transaction that writes the object back aborts — not just operations that touch the
+collection. If the collection is grown by a permissionless or low-gated entry function, an
+attacker can spam appends until the object is frozen, permanently bricking every code path
+that mutates it (DoS).
+
+This is a **different root cause from SUI-30 and SUI-15**: those are about *gas* cost
+(O(n) lookups / unbounded loops). SUI-45 is about the *object byte-size cap* — the object
+becomes unwritable even for cheap, unrelated operations, and the limit is a hard protocol
+constant, not a gas budget the caller can raise.
+
+Crucially, `Table` / `Bag` / `ObjectTable` / `TableVec` store each entry as a **separate
+dynamic field** (its own object slot) — they do **not** grow the parent object. So a field
+that is *also* redundantly maintained as a `vector`/`VecMap` alongside an existing `Table`
+is a pure liability: it adds the size-cap DoS while the `Table` already provides the lookup.
+
+**Pattern:**
+```move
+// VULNERABLE — agent_list grows the AgentRegistry object on every registration.
+// It is redundant: agents are already keyed in the `agents` Table.
+public struct AgentRegistry has key {
+    id: UID,
+    agents: Table<address, AgentEntry>,  // O(1), stored as dynamic fields — does NOT bloat the object
+    agent_list: vector<String>,          // inline — every push grows the object's serialized bytes
+}
+
+public entry fun register(reg: &mut AgentRegistry, name: String, ctx: &mut TxContext) {
+    // ... permissionless registration ...
+    reg.agent_list.push_back(name);      // monotonic object growth -> eventual max_move_object_size abort
+    table::add(&mut reg.agents, sender(ctx), AgentEntry { /* ... */ });
+}
+// Attack: spam register() (gas is sub-cent on Sui). At ~256KB the object can no longer be
+// written -> register() and any other &mut AgentRegistry function abort forever.
+
+// SAFE — drop the redundant inline collection; rely on the Table.
+public struct AgentRegistry has key {
+    id: UID,
+    agents: Table<address, AgentEntry>,
+    count: u64,  // if a count is needed, store a scalar, not the full list
+}
+// If enumeration is genuinely required, use TableVec (dynamic-field-backed) instead of vector,
+// or emit an event per registration and index off-chain.
+```
+
+**Check:**
+1. Grep every `has key` struct for inline collection fields: `vector<`, `VecMap`, `VecSet`,
+   `String`/`vector<u8>` blobs that can grow.
+2. For each, trace who appends. If **any** public/entry (or PTB-callable `public fun`) path
+   grows it without a hard size cap → candidate DoS.
+3. Ask the three severity questions:
+   - Is the growth path **permissionless / low-gated**? (anyone can spam → higher severity)
+   - Is the object **liveness-critical**? (protocol can't operate if it's frozen → higher)
+   - Is there an **admin migration/replacement** path for the object? (mitigates → lower)
+4. **Redundancy test:** is the same data already held in a `Table`/`Bag`? If yes, the inline
+   field is removable with no functional loss — unambiguous bug; recommend removal.
+5. Estimate feasibility: `n_max ≈ max_move_object_size / sizeof(element)` (e.g. 32-byte
+   address → ~7–8k entries; ~100-byte struct → ~2.5k). On Sui these counts are cheap to reach.
+6. Severity: **High** only if growth is permissionless AND the object is required for ongoing
+   operation with no migration path; **Medium** if admin-gated/rate-limited or an admin can
+   migrate; **Low/Info** if growth is tightly bounded by design.
+
+**Remediation:** Remove the redundant inline collection, or move it to a dynamic-field-backed
+structure (`Table`, `Bag`, `TableVec`) so entries live in separate object slots and never
+inflate the parent. For pure enumeration needs, prefer events + off-chain indexing.
+
+**Cross-ref:** SUI-30 (VecMap/VecSet O(n) gas — the gas-side twin of this size-side bug),
+SUI-15 (unbounded iteration), SUI-25 (dynamic-field cleanup on delete).
+
+---
+
 ## Sui Verification Checklist
 
 - [ ] All shared object mutations are permission-gated
@@ -1592,3 +1668,4 @@ public entry fun remove_from_whitelist(list: &mut Whitelist, index: u64) {
 - [ ] No dead migration functions in v1 (never-upgraded) packages (SUI-42)
 - [ ] No `tx_context::digest()`, `uid_to_bytes`, `epoch()`, or `epoch_timestamp_ms()` used as randomness — use `sui::random::Random` (SUI-43)
 - [ ] No `swap_remove` on index-ordered data structures — only safe for unordered bags/sets (SUI-44)
+- [ ] No unbounded inline collections (`vector`/`VecMap`/`VecSet`) in `has key` structs grown by permissionless paths — they inflate the object toward `max_move_object_size` (~256KB) and brick all writes; use `Table`/`Bag`/`TableVec` or events instead (SUI-45)

@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.6.2"
+  version: "3.10.0"
   author: pantheraudits
   category: security
   tags:
@@ -54,18 +54,18 @@ file in this skill's directory (for Codex this is typically
 | `move-fp-catalog.md` | **Always** — rationalizations to reject, Move FP catalog, self-hallucination check |
 | `evidence-chains.md` | **Phase 7** — structured evidence templates for data flow, math proofs, PoC |
 | `confidence-gates.md` | **Phase 7** — confidence gating, hard evidence requirements per finding type |
-| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-44 |
+| `sui-patterns.md` | When chain is **Sui** (imports `sui::object`, `sui::transfer`, etc.) — SUI-01 to SUI-45 |
 | `aptos-patterns.md` | When chain is **Aptos** (imports `aptos_framework`, `aptos_std`, etc.) — APT-01 to APT-25 |
 | `defi-vectors.md` | When protocol involves tokens, swaps, lending, staking, or oracles — DEFI-01 to DEFI-10 + subcategory router |
 | `semantic-gap-checks.md` | When the protocol has accumulators, checkpoints, rewards, lending state, cross-module accounting, or multi-step state transitions |
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`, `last_index`, `reward_debt`, `last_reward_per_share`) — DEFI-11 to DEFI-16, DEFI-88 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
-| `defi/defi-lending.md` | When lending/borrowing detected (`borrow`, `repay`, `collateral`, `health_factor`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84 |
+| `defi/defi-lending.md` | When lending/borrowing or limiter logic detected (`borrow`, `repay`, `collateral`, `health_factor`, `limiter`, `rate_limit`, `outflow`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90 |
 | `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, `float`, `Decimal`, `WAD`, fee/share math) OR when reward/accumulator/liquidity_mining patterns detected — DEFI-35 to DEFI-42, DEFI-85 to DEFI-87 |
 | `defi/defi-slippage.md` | When swap/DEX patterns detected (`swap`, `min_amount_out`, `slippage`, AMM pool) — DEFI-43 to DEFI-49 |
 | `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81, DEFI-83 |
 | `defi/defi-auction-clm.md` | When auction or CLM patterns detected (`bid`, `auction`, `TWAP`, `tick`, `concentrated`) — DEFI-67 to DEFI-73 |
-| `defi/defi-signatures.md` | When signature verification detected (`ed25519`, `secp256k1`, `verify_signature`, `nonce`) — DEFI-74 to DEFI-79 |
+| `defi/defi-signatures.md` | When signature verification detected (`ed25519`, `secp256k1`, `verify_signature`, `nonce`) OR a mutable signer-set/threshold/quorum is verified against (`threshold`, `signers`, `quorum`, `multisig`, `approvers`, `guardians`) — DEFI-74 to DEFI-79, DEFI-89 |
 | `defi/defi-lending-design-patterns.md` | When lending/borrowing detected — known-good patterns (DESIGN-L1 to L4) that should NOT be reported as bugs |
 | `audit-prompts.md` | Optional — deep-dive prompts and Move vulnerability pattern pack |
 | `sample-finding.md` | Reference for output format — do not load during audits |
@@ -163,7 +163,7 @@ For every pair of inverse operations, verify symmetry:
 - borrow/repay: `repay(borrow(X)) >= X` always (rounding favors protocol)
 - mint/burn: `burn(mint(X)) <= X` always
 - liquidation trigger/seize: same price oracle type, or bounded divergence
-- rate limit add/reduce: reduce applied to same time segment as add
+- rate limit add/reduce: reductions net against still-live usage across segment/window rollover
 - admin update: only config changes, runtime state preserved
 For each pair, check: (a) rounding direction, (b) state consistency, (c) oracle consistency, (d) access control symmetry
 
@@ -284,7 +284,7 @@ Required pairs to check in every lending protocol audit.
 7. **admin_config ↔ rate_limiters** —
    Does the config update function preserve accumulated runtime state (limiter segments,
    accumulators, counters)?
-   If config update resets limiters → sandwich attack: borrow to limit → admin resets → borrow again. (→ DEFI-84)
+   If config update resets limiters → sandwich attack; if reducers only touch the current segment → rollover griefing. (→ DEFI-84, DEFI-90)
 
 8. **oracle_eligibility ↔ oracle_seize** —
    Does liquidation use the same price type for both trigger and seize, OR enforce a

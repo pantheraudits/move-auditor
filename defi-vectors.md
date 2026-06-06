@@ -15,7 +15,7 @@ files may apply** — a lending protocol typically needs lending + liquidation +
 |-------------|------------------------------|-----------|
 | Staking/Yield | `stake`, `unstake`, `reward_per_share`, `reward_per_token`, `accumulator`, `farming`, `last_index`, `reward_debt`, `last_reward_per_share`, `last_cumulative` | `defi/defi-staking.md` |
 | Oracle | `get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`, `price_info` | `defi/defi-oracle.md` |
-| Lending/Borrowing | `borrow`, `repay`, `collateral`, `health_factor`, `loan`, `debt` | `defi/defi-lending.md` |
+| Lending/Borrowing | `borrow`, `repay`, `withdraw`, `deposit`, `collateral`, `health_factor`, `loan`, `debt`, `limiter`, `rate_limit`, `outflow` | `defi/defi-lending.md` |
 | Math/Precision | Complex fee/share/interest math, `PRECISION`, `DECIMAL`, `RAY`, `WAD` | `defi/defi-math-precision.md` |
 | Slippage/DEX | `swap`, `min_amount_out`, `slippage`, `deadline`, `amm`, `pool` | `defi/defi-slippage.md` |
 | Liquidation | `liquidat`, `seize`, `health_factor`, `bad_debt`, `insurance_fund` | `defi/defi-liquidation.md` |
@@ -293,6 +293,7 @@ Bug: docs/UI tell users to pass a Sui wallet address, but Move requires a WXA/ac
 - [ ] Oracle: Depeg scenarios handled for wrapped assets (DEFI-21)
 - [ ] Lending: Pause mechanism is symmetric (repay ↔ liquidate) (DEFI-28)
 - [ ] Lending: Token denylist/freeze cannot permanently block operations (DEFI-29)
+- [ ] Lending: Rolling net-outflow limiters net repayment/redeposit across segment rollover (DEFI-90)
 - [ ] Math: Division always after multiplication (DEFI-35)
 - [ ] Math: Time units consistent — Sui ms, Aptos seconds (DEFI-41)
 - [ ] Slippage: No hardcoded slippage tolerance (DEFI-45)

@@ -11,6 +11,126 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.10.0] — 2026-06-05
+
+### Rolling net-outflow limiter rollover griefing (DEFI-90 added)
+
+Adds a generic lending/rate-limiter check for segmented rolling caps that are intended
+to track net outflow but only reduce the current time bucket. If outflow is charged
+before a segment boundary and repayment/redeposit happens after rollover, the reducer
+can miss the live segment that still contributes to `count_current_outflow()`, leaving
+stale usage counted until expiry.
+
+**defi/defi-lending.md — DEFI-90 added:**
+- New check: "Rolling Net-Outflow Limiter Only Reduces Current Segment"
+- Generic vulnerable/safe Move examples using a segmented limiter, without naming any
+  specific protocol or incident
+- Detection ritual: find segmented limiter signals -> classify gross vs net cap ->
+  trace outflow writer and inflow reducer paths -> compare reducer segment selection
+  against the live-window summation -> run a boundary add/reduce trace
+- Severity guidance for borrow/withdraw/deleveraging DoS, plus FP guards for gross
+  historical caps, explicit `net_outflow` totals, and reducers that walk live segments
+- Added to the Lending Verification Checklist
+
+**Routing changes:**
+- `checklist-router.md`, `defi-vectors.md`, and `SKILL.md` now route limiter/rate-limit/
+  outflow signals to `defi/defi-lending.md` and force DEFI-90 review
+- `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `CLAUDE.md` updated so DEFI-90 is
+  listed in the lending coverage range and DEFI-91 is marked as next available
+
+## [3.9.0] — 2026-06-05
+
+### Packed field mask-width mismatch (common-move.md 2.8 added)
+
+Adds a chain-agnostic check for packed counters, flags, enum values, and bitfields whose
+getter mask is narrower than the stored field's valid range. The key edge case is a count
+whose maximum is one greater than the maximum index: 16 buckets have max index 15, but an
+active-count value of 16 needs 5 bits. A 4-bit getter mask decodes that value as 0.
+
+**common-move.md — 2.8 added:**
+- New check: "Packed Field Mask Width Mismatch"
+- Generic vulnerable/safe pattern using packed metadata and an active bucket counter
+- Detection ritual: grep packed-state signals (`MASK`, `SHIFT`, `BITS`, `bitmap`, `flags`,
+  `packed`, `bucket`, `slot`) -> derive getter mask width -> trace writer max value ->
+  distinguish max index from max count -> test power-of-two boundaries
+- Severity guidance: escalate when a truncated getter feeds empty/nonempty checks,
+  close/cleanup eligibility, queue draining, claim/redemption processing, or accounting
+  gates
+- Added to the Common Move Verification Checklist
+
+**checklist-router.md:**
+- New feature-flag row for packed fields and repeated bitwise operations around counters,
+  forcing the common-move.md 2.8 mask-width review
+
+---
+
+## [3.8.0] — 2026-06-01
+
+### Unbounded inline-collection object-size DoS (SUI-45 added)
+
+Adds detection for the Sui object-size DoS class: a `vector<T>` (or `VecMap`/`VecSet`,
+which are vectors internally) stored as a field of a `has key` struct lives **inline** in
+the object's serialized bytes, so every append grows the parent object monotonically. Sui
+enforces a hard per-object cap (`max_move_object_size`, ~256KB on mainnet); once reached,
+**any** write to the object aborts — even cheap operations unrelated to the collection. A
+permissionless growth path lets an attacker spam appends (sub-cent gas on Sui) until the
+object is permanently frozen.
+
+This is distinct from SUI-30 (VecMap/VecSet O(n) *gas*) and SUI-15 (unbounded iteration):
+SUI-45 is about the object *byte-size cap*, a hard protocol constant, not a gas budget.
+`Table`/`Bag`/`ObjectTable`/`TableVec` store entries as separate dynamic fields and do NOT
+grow the parent — so an inline collection kept redundantly alongside an existing `Table` is
+a pure liability.
+
+**sui-patterns.md — SUI-45 added:**
+- New check: "Unbounded Inline Collection Grows Object Past `max_move_object_size`"
+- Generic vulnerable/safe pattern (an `AgentRegistry` with a redundant `agent_list: vector`
+  beside an `agents: Table`)
+- Detection ritual: enumerate inline collection fields in `has key` structs → trace
+  append paths → redundancy test against existing `Table`/`Bag` → feasibility estimate
+  (`n_max ≈ max_move_object_size / sizeof(element)`)
+- Severity guidance: High only if growth is permissionless AND object is liveness-critical
+  with no migration path; Medium if admin-gated/rate-limited or migratable; Low/Info if
+  bounded by design
+- Added to the Sui Verification Checklist
+
+**checklist-router.md:**
+- New feature-flag row: `has key` struct with an inline `vector`/`VecMap`/`VecSet` grown by
+  a public/entry path → mandatory SUI-45 object-size DoS review
+
+---
+
+## [3.7.0] — 2026-06-01
+
+### Stale signer-policy signature class (DEFI-89 added)
+
+Adds detection for off-chain authorization schemes (multi-sig vaults, gasless relays,
+off-chain quorums) that verify collected signatures against **live, mutable** policy state
+— the signer set, threshold, or quorum — instead of the policy that existed when the
+signatures were produced. Because the signed message binds only the request (amount,
+recipient, nonce) and not a policy version, a routine signer/threshold update can revive a
+request that was deliberately sub-threshold when signed: a "not enough signatures yesterday"
+payload silently becomes valid after the threshold is lowered or the signer set narrowed,
+releasing funds with no fresh approval.
+
+**defi/defi-signatures.md — DEFI-89 added:**
+- New check: "Signatures Verified Against Live Policy Instead of the Policy at Signing Time"
+- Generic vulnerable/safe pattern (multi-sig vault `withdraw` re-checked against mutable
+  `Config.threshold` / `Config.signers`)
+- Detection ritual: enumerate policy fields (`threshold`, `signers`, `quorum`,
+  `min_signatures`, `approvers`, `guardians`, …) → find any mutating writer → confirm the
+  signed message binds a policy version/nonce; if not → finding
+- Fix guidance: monotonic `signer_policy_nonce` bumped on every signer/threshold/quorum
+  change and bound into the signed message + caller-supplied expected nonce
+- Distinguished from DEFI-74 (replay) and DEFI-76 (missing message params)
+- Added to the Signature Verification Checklist
+
+**checklist-router.md:**
+- Signature signal row widened to also fire on `threshold`, `signers`, `quorum`, `multisig`,
+  `approvers`, `guardians`, with a mandatory DEFI-89 policy-snapshot follow-up
+
+---
+
 ## [3.6.2] — 2026-04-27
 
 ### Stale-package surface — Scallop incident class (SUI-23 strengthened, DEFI-88 added)
