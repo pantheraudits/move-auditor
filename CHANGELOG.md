@@ -11,6 +11,35 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.11.1] — 2026-06-07
+
+### Duplicate DEFI ID collisions resolved + DEFI-91/92 precision guards + registration sync
+
+A consistency sweep across every file in the skill found two ID collisions where one
+ID labelled two unrelated bugs, plus stale registration ranges. Fixed for accuracy:
+
+**ID collisions resolved (renumbered the less-referenced member of each pair):**
+- `DEFI-88` had two meanings → kept staking "Uninitialized Account Index" (Scallop class)
+  as DEFI-88; renamed lending "Missing Post-Trade Health Check in Margin Trading Proxy"
+  to **DEFI-93**. Updated all cross-refs in `defi/defi-lending.md` and `defi/defi-liquidation.md`.
+- `DEFI-89` had two meanings → kept signatures "Live Policy vs Policy-at-Signing" as
+  DEFI-89; renamed liquidation "Self-Trade Value Extraction on Unhealthy Margin Accounts"
+  to **DEFI-94**. Updated all cross-refs.
+
+**Precision guards for DEFI-91/92 (anti-false-positive):**
+- `move-fp-catalog.md` (2E) — two new rows: a single liquidation/settlement abort is NOT a
+  finding unless the queue/keeper retries the identical item (permanent DoS); and a bounded,
+  protocol-favoring price-basis gap is only a finding when a hard `assert!` ties the two
+  bases together or the gap is unbounded/attacker-amplifiable.
+
+**Registration sync (ranges were stale/incomplete):**
+- `README.md`, `SKILL.md`, `CLAUDE.md`, `AGENTS.md` — DeFi ID ranges corrected so every
+  defined check is registered: staking +88, lending +93, math +92 (and the previously
+  missing 85–87), liquidation +91/+94. Next available ID bumped to **DEFI-95**.
+- `SKILL.md` lending row also now triggers on `margin`/`leverage`.
+
+---
+
 ## [3.11.0] — 2026-06-07
 
 ### Check-vs-settlement value-basis divergence (DEFI-91 + DEFI-92 added)

@@ -166,12 +166,12 @@ detected chain and protocol type, keeping the context window lean.
 | Sui-specific | `sui-patterns.md` | SUI-01 to SUI-45 |
 | Aptos-specific | `aptos-patterns.md` | APT-01 to APT-25 |
 | DeFi cross-cutting | `defi-vectors.md` | DEFI-01 to DEFI-10 |
-| Staking & yield | `defi/defi-staking.md` | DEFI-11 to DEFI-16 |
+| Staking & yield | `defi/defi-staking.md` | DEFI-11 to DEFI-16, DEFI-88 |
 | Oracles | `defi/defi-oracle.md` | DEFI-17 to DEFI-24 |
-| Lending & borrowing | `defi/defi-lending.md` | DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90 |
-| Math & precision | `defi/defi-math-precision.md` | DEFI-35 to DEFI-42, DEFI-85 to DEFI-87 |
+| Lending & borrowing | `defi/defi-lending.md` | DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90, DEFI-93 |
+| Math & precision | `defi/defi-math-precision.md` | DEFI-35 to DEFI-42, DEFI-85 to DEFI-87, DEFI-92 |
 | Slippage & MEV | `defi/defi-slippage.md` | DEFI-43 to DEFI-49 |
-| Liquidation | `defi/defi-liquidation.md` | DEFI-50 to DEFI-66, DEFI-81, DEFI-83 |
+| Liquidation | `defi/defi-liquidation.md` | DEFI-50 to DEFI-66, DEFI-81, DEFI-83, DEFI-91, DEFI-94 |
 | Auctions & CLM | `defi/defi-auction-clm.md` | DEFI-67 to DEFI-73 |
 | Signatures | `defi/defi-signatures.md` | DEFI-74 to DEFI-79, DEFI-89 |
 
@@ -197,12 +197,12 @@ move-auditor/
 │
 ├── defi-vectors.md                   # DeFi attack vectors (DEFI-01 to DEFI-10) + router
 ├── defi/
-│   ├── defi-staking.md               # Staking/yield (DEFI-11 to DEFI-16)
+│   ├── defi-staking.md               # Staking/yield (DEFI-11 to DEFI-16, 88)
 │   ├── defi-oracle.md                # Oracles (DEFI-17 to DEFI-24)
-│   ├── defi-lending.md               # Lending/borrowing (DEFI-25 to DEFI-34, 80, 82, 84, 90)
-│   ├── defi-math-precision.md        # Math & precision (DEFI-35 to DEFI-42, 85-87)
+│   ├── defi-lending.md               # Lending/borrowing (DEFI-25 to DEFI-34, 80, 82, 84, 90, 93)
+│   ├── defi-math-precision.md        # Math & precision (DEFI-35 to DEFI-42, 85-87, 92)
 │   ├── defi-slippage.md              # Slippage & DEX (DEFI-43 to DEFI-49)
-│   ├── defi-liquidation.md           # Liquidation (DEFI-50 to DEFI-66, 81, 83)
+│   ├── defi-liquidation.md           # Liquidation (DEFI-50 to DEFI-66, 81, 83, 91, 94)
 │   ├── defi-auction-clm.md           # Auctions & CLM (DEFI-67 to DEFI-73)
 │   ├── defi-signatures.md            # Signatures (DEFI-74 to DEFI-79, DEFI-89)
 │   └── defi-lending-design-patterns.md  # Known-good patterns (DESIGN-L1 to L4)

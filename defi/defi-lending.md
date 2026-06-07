@@ -1,4 +1,4 @@
-# DeFi Lending Vulnerability Patterns (DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-88, DEFI-90)
+# DeFi Lending Vulnerability Patterns (DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90, DEFI-93)
 
 Deep-dive reference for auditing Move lending protocols on Sui and Aptos.
 Load when code contains `borrow`, `repay`, `collateral`, `health_factor`,
@@ -521,7 +521,7 @@ public fun update(emode: &mut EMode, new_params: NewEMode) {
 
 ---
 
-## DEFI-88 — Missing Post-Trade Health Check in Margin Trading Proxy
+## DEFI-93 — Missing Post-Trade Health Check in Margin Trading Proxy
 
 **Description:** Margin protocols often wrap an underlying orderbook's trading functions
 behind a proxy module that enforces margin-specific invariants. If the proxy checks
@@ -578,7 +578,7 @@ public fun place_order<B, Q>(
 1. Find every proxy function that places orders on behalf of a margin/leveraged account
 2. Verify each one recomputes health ratio AFTER the trade settles
 3. Compare with borrow/withdraw paths — if those check health but trade paths don't, flag it
-4. Cross-ref: DEFI-52 (withdrawal threshold), DEFI-89 (self-trade value extraction)
+4. Cross-ref: DEFI-52 (withdrawal threshold), DEFI-94 (self-trade value extraction)
 
 ---
 
@@ -702,5 +702,5 @@ segments expire. Segments then serve only as expiry bookkeeping.
 - [ ] Admin parameter setters call `accrue_interest()` before applying new values (DEFI-80)
 - [ ] Emergency mechanism entry and stop conditions read from the same source (DEFI-82)
 - [ ] Admin config updates do NOT overwrite embedded runtime state (limiters, accumulators, counters) (DEFI-84)
-- [ ] Margin trade proxy revalidates health ratio after every trade when debt exists (DEFI-88)
+- [ ] Margin trade proxy revalidates health ratio after every trade when debt exists (DEFI-93)
 - [ ] Rolling net-outflow limiters reduce live usage across segment rollover; boundary add/reduce test returns usage to zero (DEFI-90)

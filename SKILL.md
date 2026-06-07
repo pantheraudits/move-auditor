@@ -2,7 +2,7 @@
 name: move-auditor
 description: Audits Move contracts (Sui & Aptos) for security bugs.
 metadata:
-  version: "3.11.0"
+  version: "3.11.1"
   author: pantheraudits
   category: security
   tags:
@@ -60,10 +60,10 @@ file in this skill's directory (for Codex this is typically
 | `semantic-gap-checks.md` | When the protocol has accumulators, checkpoints, rewards, lending state, cross-module accounting, or multi-step state transitions |
 | `defi/defi-staking.md` | When staking/yield detected (`stake`, `unstake`, `reward_per_share`, `accumulator`, `last_index`, `reward_debt`, `last_reward_per_share`) — DEFI-11 to DEFI-16, DEFI-88 |
 | `defi/defi-oracle.md` | When oracle usage detected (`get_price`, `oracle`, `pyth`, `switchboard`, `price_feed`) — DEFI-17 to DEFI-24 |
-| `defi/defi-lending.md` | When lending/borrowing or limiter logic detected (`borrow`, `repay`, `collateral`, `health_factor`, `limiter`, `rate_limit`, `outflow`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90 |
+| `defi/defi-lending.md` | When lending/borrowing or limiter logic detected (`borrow`, `repay`, `collateral`, `health_factor`, `limiter`, `rate_limit`, `outflow`, `margin`, `leverage`) — DEFI-25 to DEFI-34, DEFI-80, DEFI-82, DEFI-84, DEFI-90, DEFI-93 (post-trade health check) |
 | `defi/defi-math-precision.md` | When complex financial math detected (`PRECISION`, `DECIMAL`, `float`, `Decimal`, `WAD`, fee/share math) OR when reward/accumulator/liquidity_mining patterns detected — DEFI-35 to DEFI-42, DEFI-85 to DEFI-87, DEFI-92 (check-vs-settlement divergence) |
 | `defi/defi-slippage.md` | When swap/DEX patterns detected (`swap`, `min_amount_out`, `slippage`, AMM pool) — DEFI-43 to DEFI-49 |
-| `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81, DEFI-83, DEFI-89, DEFI-91 (check-vs-settle price-basis revert) |
+| `defi/defi-liquidation.md` | When liquidation mechanisms detected (`liquidat`, `seize`, `bad_debt`, `insurance`) — DEFI-50 to DEFI-66, DEFI-81, DEFI-83, DEFI-91 (check-vs-settle price-basis revert), DEFI-94 (self-trade extraction) |
 | `defi/defi-auction-clm.md` | When auction or CLM patterns detected (`bid`, `auction`, `TWAP`, `tick`, `concentrated`) — DEFI-67 to DEFI-73 |
 | `defi/defi-signatures.md` | When signature verification detected (`ed25519`, `secp256k1`, `verify_signature`, `nonce`) OR a mutable signer-set/threshold/quorum is verified against (`threshold`, `signers`, `quorum`, `multisig`, `approvers`, `guardians`) — DEFI-74 to DEFI-79, DEFI-89 |
 | `defi/defi-lending-design-patterns.md` | When lending/borrowing detected — known-good patterns (DESIGN-L1 to L4) that should NOT be reported as bugs |

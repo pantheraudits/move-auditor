@@ -459,7 +459,7 @@ let max_repay = obligation.liquidation_snapshot() * close_factor - obligation.al
 
 ---
 
-## DEFI-89 — Self-Trade Value Extraction on Unhealthy Margin Accounts
+## DEFI-94 — Self-Trade Value Extraction on Unhealthy Margin Accounts
 
 **Description:** When a margin protocol's self-match protection only compares
 account IDs (not common ownership), an attacker can trade their unhealthy margin
@@ -480,7 +480,7 @@ fun check_self_match(maker_account_id: ID, taker_account_id: ID) {
 // Attacker flow:
 // 1. Account A (margin): borrow at max leverage, risk_ratio ~1.25
 // 2. Account B (normal): place maker bid at lower oracle bound
-// 3. Account A sells into B at worst allowed price — no health check (DEFI-88)
+// 3. Account A sells into B at worst allowed price — no health check (DEFI-93)
 // 4. Repeat until A is liquidatable
 // 5. Liquidate A: out_amount = repay * (1 + bonus)
 //    If collateral < debt * (1 + bonus), partial repay → residual bad debt
@@ -492,7 +492,7 @@ fun check_self_match(maker_account_id: ID, taker_account_id: ID) {
    same address can cross orders
 3. Check if liquidation forces full debt repayment when all collateral is consumed —
    if not, calculate the bad debt: `1 - risk_ratio / (1 + liquidation_bonus)`
-4. Cross-ref: DEFI-53 (bad debt handling), DEFI-88 (missing post-trade health check)
+4. Cross-ref: DEFI-53 (bad debt handling), DEFI-93 (missing post-trade health check)
 
 ---
 
@@ -527,27 +527,13 @@ public fun liquidate_single_position(...) {
 ```
 
 **Check:**
-1. **Trace the action end-to-end.** In every liquidation / backstop / ADL / forced-close / settlement path, identify the price (or unit/fee) used to *decide* the branch vs the price used to *execute* the transfer/settle. List both with file:line.
-2. **Are they the same value?** If the check reads `mark_px`/`oracle`/`EMA`/`mid` and settlement reads a `round_*_to_tick`, last-trade, or index price → divergence exists.
-3. **Find the cross-basis invariant.** Look for any `assert!` / `abort` that ties a check-derived quantity to a settle-derived quantity (`attribution > 0 ⟹ covered_loss == 0`, `pnl >= 0 ⟹ no_shortfall`, `healthy ⟹ no_bad_debt`). That assert is the revert trigger.
-4. **Substitute boundary values.** Take a position with `margin + uPnL_at_check ≈ 0⁺` (the typical state of a backstop-liquidatable, near-zero-equity account). Round the settle price one tick against the user. Does realized loss now exceed remaining collateral? If yes → the invariant is violated and the tx aborts.
-5. **Is the failing item retried with identical inputs?** If the liquidation queue re-pops the same request after a revert (no skip/quarantine/partial-progress) → the revert is permanent, not transient → escalate to High/Critical.
-6. **Multi-position drain:** when an account holds several cross-margin positions processed in profitability order, each earlier transfer drains the user's balance, making a *later* small-positive-attribution position more likely to hit the shortfall. Trace the loop, not just one position.
+1. Identify the price/unit/fee used to *decide* the branch vs the one used to *execute* the settle/transfer. If the check reads `mark_px`/`oracle`/`EMA`/`mid` and settlement reads a `round_*_to_tick`, last-trade, or index price → divergence exists.
+2. Look for any `assert!`/`abort` tying a check-derived quantity to a settle-derived one (`attribution > 0 ⟹ covered_loss == 0`, `pnl >= 0 ⟹ no_shortfall`). That assert is the revert trigger.
+3. Substitute boundary values: a position with `margin + uPnL_at_check ≈ 0⁺` and the settle price rounded one tick against the user. Does realized loss now exceed remaining collateral? If yes → invariant violated, tx aborts.
+4. Is the failing item retried with identical inputs by the queue/keeper (no skip/quarantine)? If so the revert is permanent → escalate to High/Critical.
+5. Make the check and settlement use the SAME basis: recompute attribution/PnL with `settle_price`, OR replace the hard `assert!` with a graceful branch (transfer only what is transferable, let remainder logic absorb the rest) so a settlement-time shortfall never aborts the whole liquidation. Cross-ref: DEFI-37, DEFI-39, DEFI-41, DEFI-92.
 
-**Impact:** Permanent DoS of the protocol's last-resort liquidation → insolvent positions cannot be closed → unbounded bad debt socialized to LPs/lenders. An attacker can deliberately open positions on coarse-tick markets engineered to wedge in the revert loop while hedging the other side. Severity is typically **High–Critical** because the affected account is permanently unliquidatable.
-
-**Fix:** Make the check and the settlement use the **same** price basis. Recompute attribution/PnL with `settle_price` (the tick-rounded value actually used), so `attribution > 0` genuinely implies `covered_loss == 0` and the assert is correct by construction. If the mark-based figure must be retained for other accounting, **replace the hard `assert!` with a graceful branch** that transfers only what is actually transferable and lets the remainder logic absorb the rest — never let a settlement-time shortfall abort the whole liquidation:
-```move
-if (attribution > 0) {
-    let transferable = if (covered_loss == 0) { (attribution as u64) } else { 0 };
-    if (transferable > 0) {
-        transfer_amount_to_backstop_liquidator(liquidator, account, market, transferable);
-    };
-    // untransferred amount handled by remainder/finalization logic — no abort
-}
-```
-
-**References:** DEFI-37 (decimal mismatch), DEFI-39 (rounding direction), DEFI-41 (time-unit confusion), DEFI-92 (generic check-vs-settle divergence heuristic), DEFI-63/64 (other liquidation-revert DoS classes).
+**Impact:** Permanent DoS of last-resort liquidation → insolvent positions cannot be closed → unbounded bad debt socialized to LPs/lenders. An attacker can open positions on coarse-tick markets engineered to wedge in the revert loop while hedging the other side. Typically **High–Critical**.
 
 ---
 
@@ -591,5 +577,5 @@ if (attribution > 0) {
 - [ ] Liquidator can specify minimum collateral received (DEFI-66)
 - [ ] Liquidation path checks idle cash availability before redeeming underlying (DEFI-81)
 - [ ] Close factor enforced per-TRANSACTION (cumulative), not per-call — PTB repeated call bypass (DEFI-83)
-- [ ] Self-match protection prevents same-owner cross between margin and normal accounts (DEFI-89)
+- [ ] Self-match protection prevents same-owner cross between margin and normal accounts (DEFI-94)
 - [ ] Liquidation/backstop/ADL decision and settlement use the SAME price basis — no mark-vs-tick-rounded divergence behind a hard `assert!`; failing queue items don't retry forever (DEFI-91)

@@ -22,11 +22,11 @@ and Aptos. Claude Code users install it by copying this directory to
 4. **DeFi cross-cutting checks** go in `move-auditor/defi-vectors.md` — DEFI-01 to DEFI-10
 5. **DeFi subcategory checks** go in `move-auditor/defi/defi-<category>.md` — DEFI-11+
    - `defi-staking.md` (DEFI-11–16, DEFI-88), `defi-oracle.md` (DEFI-17–24)
-   - `defi-lending.md` (DEFI-25–34, DEFI-80, DEFI-82, DEFI-84, DEFI-90), `defi-math-precision.md` (DEFI-35–42)
-   - `defi-slippage.md` (DEFI-43–49), `defi-liquidation.md` (DEFI-50–66)
+   - `defi-lending.md` (DEFI-25–34, DEFI-80, DEFI-82, DEFI-84, DEFI-90, DEFI-93), `defi-math-precision.md` (DEFI-35–42, DEFI-85–87, DEFI-92)
+   - `defi-slippage.md` (DEFI-43–49), `defi-liquidation.md` (DEFI-50–66, DEFI-81, DEFI-83, DEFI-91, DEFI-94)
    - `defi-auction-clm.md` (DEFI-67–73), `defi-signatures.md` (DEFI-74–79, DEFI-89)
    - `defi-lending-design-patterns.md` (DESIGN-L1–L4, known-good patterns)
-   - Next available ID: **DEFI-93**
+   - Next available ID: **DEFI-95**
 6. **Anti-FP / verification files** are at top-level:
    - `move-fp-catalog.md` — Always loaded; FP patterns and rationalizations to reject
    - `evidence-chains.md` — Phase 7; structured evidence templates

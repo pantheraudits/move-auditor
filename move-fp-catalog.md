@@ -85,6 +85,8 @@ them unless you have concrete evidence of ACTUAL harm despite the protection.
 | 6 | Liquidation bonus matching industry standard (5-10%) | Standard incentive range used by Compound, Aave, MakerDAO | When the bonus exceeds collateral margin or creates profitable self-liquidation |
 | 7 | Interest rate kink/jump model behavior | Steep rate increase above optimal utilization is intentional — it incentivizes repayment | When the kink parameters create discontinuities that can be gamed |
 | 8 | Admin parameter setting as sole finding | Admin actions are trusted unless admin is untrusted by design | When admin action is routine AND unprivileged users are later bricked (see common-move.md 12.2) |
+| 9 | Liquidation/settlement aborts when a tick-rounded or worse-basis price causes a shortfall | A single abort just prevents an invalid write — it is not yet a finding | When the SAME queue/keeper item is retried with identical inputs (no skip/quarantine/partial-progress), making the revert permanent and the account unliquidatable — trace the retry path before claiming permanent DoS (DEFI-91/92) |
+| 10 | Check and settlement use different prices, but the gap is bounded and protocol-favoring | Conservative rounding against the user by ≤1 tick is standard and self-correcting; not every basis difference is exploitable | When a hard `assert!` ties the check-basis quantity to the settle-basis quantity (e.g. `attribution>0 ⟹ covered_loss==0`) so the gap can flip a sign and revert, OR the gap is unbounded/attacker-amplifiable (DEFI-91/92) |
 
 ### 2F. Documented Design Constraints Are Not Medium+ Findings
 
