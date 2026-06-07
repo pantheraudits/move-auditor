@@ -43,7 +43,7 @@ Load these files when entering Phase 7 — Verify & Triage:
 | Signal | Load | Follow-up |
 |--------|------|-----------|
 | `borrow`, `repay`, `withdraw`, `deposit`, `collateral`, `health_factor`, `margin`, `risk_ratio`, `leverage`, `limiter`, `rate_limit`, `outflow` | `defi-vectors.md`, `defi/defi-lending.md` | cross-module interaction scan + DEFI-90 limiter netting scan |
-| `liquidat`, `seize`, `bad_debt`, `insurance`, `self_match` | `defi/defi-liquidation.md` | idle-cash and price-source checks |
+| `liquidat`, `seize`, `bad_debt`, `insurance`, `self_match`, `backstop`, `adl`, `round_price_to_tick`, `ticker_size`, `settle_price`, `mark_px` | `defi/defi-liquidation.md`, `defi/defi-math-precision.md` | idle-cash + price-source checks + **mandatory DEFI-91/92 check-vs-settlement trace: confirm the price/rounding/units used to DECIDE the liquidation equal those used to SETTLE it, and that no hard `assert!` tying the two bases can revert a retried queue item** |
 | `oracle`, `pyth`, `switchboard`, `price_feed`, `twap` | `defi/defi-oracle.md` | stale/deviation audit |
 | `reward_per_share`, `accumulator`, `claim`, `stake`, `unstake`, `reward_manager`, `pool_reward`, `liquidity_mining`, `total_rewards` | `defi/defi-staking.md`, `defi/defi-math-precision.md`, `semantic-gap-checks.md` | checkpoint/accumulator review + **mandatory DEFI-85/86 fixed-point overflow check** |
 | `swap`, `pool`, `lp`, `min_amount_out`, `slippage` | `defi/defi-slippage.md` | PTB / multi-hop review |
@@ -60,6 +60,7 @@ Load these files when entering Phase 7 — Verify & Triage:
 | Sui `has key` struct with an inline collection field (`vector<…>`, `VecMap`, `VecSet`) grown by a public/entry path | force **object-size DoS review (SUI-45)** — inline collections inflate the object toward `max_move_object_size` (~256KB); if growth is permissionless and uncapped the object eventually bricks all writes. Flag redundancy with any existing `Table`/`Bag` |
 | `MASK`, `_MASK`, `SHIFT`, `_SHIFT`, `BITS`, `bitmap`, `bitset`, `flags`, `packed`, `bucket`, `slot`, or repeated bitwise `&` / `|` / `<<` / `>>` around counters | force **packed-field mask-width review (common-move.md 2.8)** — derive each field's bit width, distinguish max index from max count, and test power-of-two boundary values like 16 decoding through getters |
 | `fixed_point`, `decimal`, `wad`, `ray`, `float`, custom `Decimal` / `WAD` / `Float` wrapper, any `from().mul()` or `.mul().div()` chain | force fixed-point helper inspection + load `defi/defi-math-precision.md` |
+| `round`, `round_to_tick`, `ticker_size`, `lot_size`, `floor`, `ceil`, two price reads in one action (`mark`/`oracle` for a check + `tick`/`index`/`last` for settle) | force **DEFI-92 end-to-end action trace** — for each value-moving action, diff the price/rounding/units/fees used in the gating check vs the settlement; flag any divergence behind a bridging `assert!` |
 | `last_update`, `checkpoint`, `index`, `cumulative` | load `semantic-gap-checks.md` |
 | `limiter`, `rate_limit`, `outflow`, `inflow`, `segment_duration`, `cycle_duration`, `bucket` | load `defi/defi-lending.md` and force **rolling net-outflow limiter rollover review (DEFI-90)** |
 | `rate_model`, `interest_model`, `reward_rate`, `fee_rate` admin setters | force pre-accrual review |

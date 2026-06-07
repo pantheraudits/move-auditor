@@ -466,6 +466,51 @@ let unlocked = ((total_rewards as u256) * (time_passed as u256)) / (duration as 
 
 ---
 
+## DEFI-92 — Check-vs-Settlement Value-Basis Divergence (End-to-End Action Trace)
+
+**Trigger:** Any protocol where one economic action is gated by a *check* and then performed by a separate *settlement* step — liquidations, order fills, swaps, withdrawals, redemptions, ADL/backstop/forced-close, margin/health evaluation, auction clears. This is the generic form of DEFI-91; apply it to **every** value-moving action, not only liquidation.
+
+**The principle:** trace a single economic action from the predicate that decides it through to the transfer that executes it. If **pricing, rounding, units, or fees differ between the check and the settlement**, the gap can flip a sign, break an "impossible" invariant, and turn a tiny mismatch into the whole bug. The decision says "this is safe/profitable/healthy" using basis A; the execution realizes a different outcome using basis B; a hard `assert!`/`abort` tying A to B then reverts, or value silently leaks to whoever benefits from B.
+
+**Four divergence axes — check each for every action:**
+
+| Axis | Check side (decision) | Settle side (execution) | Symptom |
+|------|----------------------|-------------------------|---------|
+| **Price** | mark / oracle median / EMA / mid / TWAP | last-trade / index / tick-rounded / spot | sign flip on near-zero positions, value extraction |
+| **Rounding** | un-rounded / round-half | floor/ceil to `tick`/`lot`/`min_size`, adverse direction | off-by-one-tick loss, dust traps (DEFI-36, DEFI-39) |
+| **Units / decimals** | scale X (e.g. ms, 1e6, base units) | scale Y (e.g. s, 1e8, atomic units) | 10ⁿ over/under-charge (DEFI-37, DEFI-41) |
+| **Fees / funding** | omits fee / funding / borrow interest | charges it | shortfall the check didn't predict |
+
+**Methodology (run for each value-moving entry point):**
+1. **Locate the gate.** Find the `assert!` / `if` / `is_*_allowed` / `is_liquidatable` / `is_healthy` / `validate_*` that decides whether the action proceeds, and the exact expression it evaluates. Record the price/unit/fee inputs (file:line).
+2. **Locate the settlement.** Find where the coin/balance actually moves (`transfer`, `withdraw`, `settle`, `fill`, `mint`/`burn`, balance update). Record *its* price/unit/fee inputs (file:line).
+3. **Diff the inputs.** Are the price source, rounding direction, decimal scale, and fee terms **identical**? Any difference is a candidate finding.
+4. **Find the bridging invariant.** Search for an `assert!`/`abort` that relates a check-derived quantity to a settle-derived one (`profitable ⟹ no_loss`, `attribution > 0 ⟹ covered_loss == 0`, `healthy ⟹ no_shortfall`, `out >= min_out`). The divergence becomes critical when such an invariant exists — it converts a small mismatch into a hard revert.
+5. **Boundary substitution.** Evaluate at the worst realistic state: near-zero equity, smallest position, coarsest tick, max staleness, stalest funding. Does the basis gap exceed the buffer the check assumed? `[BOUNDARY: position equity ≈ 0⁺, settle px rounded 1 tick adverse → realized loss > collateral]`.
+6. **Persistence check.** If the divergence triggers a revert, is the action retried with identical inputs (queue/keeper loop)? Deterministic-revert-on-retry = permanent DoS, not a transient failure → upgrade severity.
+
+**Safe patterns (do NOT flag):**
+```move
+// SAFE — same price object flows into both the check and the settlement
+let px = oracle::price(market);
+assert!(is_profitable(position, px), E_NOT_PROFITABLE);
+settle(account, market, px);                       // identical basis
+
+// SAFE — check is performed on the already-rounded settle price
+let settle_px = round_price_to_tick(raw_px, dir);
+assert!(value_at(position, settle_px) >= 0, E_LOSS);  // check uses settle basis
+settle(account, market, settle_px);
+
+// SAFE — graceful branch instead of a hard assert tying two bases
+let transferable = if (covered_loss == 0) { attribution } else { 0 };
+```
+
+**Impact:** Ranges from silent value leakage (one party consistently gets the worse-by-rounding side) to permanent DoS (a settlement shortfall trips a check-vs-settle invariant and reverts a retried keeper action). Scale severity to whether the gap is bounded dust (Low) or can wedge a core flow / drain a counterparty (High–Critical).
+
+**References:** DEFI-91 (concrete liquidation instance), DEFI-37, DEFI-39, DEFI-40, DEFI-41 (the individual axes), DEFI-07 (slippage/`min_out` as the swap-side version of the bridging invariant).
+
+---
+
 ## Math / Precision Verification Checklist
 
 - [ ] All financial calculations multiply before dividing (DEFI-35)
@@ -480,3 +525,4 @@ let unlocked = ((total_rewards as u256) * (time_passed as u256)) / (duration as 
 - [ ] Every accumulator checkpoint is written BEFORE or ATOMICALLY WITH potentially-aborting arithmetic (DEFI-86)
 - [ ] Overflow thresholds computed with production token decimals and realistic amounts for all `from(A).mul(from(B))` calls (DEFI-85)
 - [ ] Reward manager overflow: grep patterns run, threshold table computed, checkpoint ordering checked, all callers traced (DEFI-87)
+- [ ] Every value-moving action traced end-to-end: check and settlement use identical price/rounding/units/fees, no check-vs-settle divergence behind a bridging `assert!` (DEFI-92)

@@ -11,6 +11,44 @@ Each release is tagged as `move-auditor@X.Y.Z`.
 
 ---
 
+## [3.11.0] — 2026-06-07
+
+### Check-vs-settlement value-basis divergence (DEFI-91 + DEFI-92 added)
+
+Adds a generic Move check for one economic action that is *decided* on one value basis
+(price / rounding / units / fees) but *settled* on a different one. When a hard
+`assert!` ties a check-derived quantity to a settle-derived quantity (e.g.
+`attribution > 0 ⟹ covered_loss == 0`), the tiny basis gap on near-zero-equity
+positions can flip the sign of realized PnL, trip the "impossible" invariant, and revert
+the whole transaction. If the failing item is retried with identical inputs by a queue or
+keeper, the revert is permanent — a last-resort liquidation can wedge an account into a
+forever-unliquidatable state that accrues bad debt.
+
+**defi/defi-liquidation.md — DEFI-91 added:**
+- New check: "Check/Settlement Price-Basis Divergence Causes Permanent Liquidation Revert"
+- Concrete vulnerable/safe Move examples (mark-based attribution vs tick-rounded settle),
+  the four divergence axes (price/rounding/units/fees), a 6-step end-to-end trace, and a
+  graceful-branch fix that replaces the hard `assert!`
+- Added to the Liquidation Verification Checklist
+
+**defi/defi-math-precision.md — DEFI-92 added:**
+- New generic check: "Check-vs-Settlement Value-Basis Divergence (End-to-End Action Trace)"
+- Protocol-agnostic methodology: trace every value-moving action (liquidation, fill, swap,
+  withdrawal, redemption, ADL, health eval, auction clear) from the gating predicate to the
+  settlement transfer; diff price/rounding/units/fees; locate any bridging invariant; run
+  boundary substitution and a persistence (retry-DoS) check
+- Divergence-axis table and safe-pattern examples; no protocol or incident named
+- Added to the Math / Precision Verification Checklist
+
+**Routing changes:**
+- `checklist-router.md`: liquidation row now triggers on `backstop`/`adl`/`round_price_to_tick`/
+  `ticker_size`/`settle_price`/`mark_px` and forces a mandatory DEFI-91/92 check-vs-settle trace;
+  new feature-flag row routes rounding/tick/dual-price-read signals to DEFI-92
+- `SKILL.md`: DEFI-91 listed in the liquidation range, DEFI-92 in the math-precision range
+- `AGENTS.md` and `CLAUDE.md`: next available ID bumped to DEFI-93
+
+---
+
 ## [3.10.0] — 2026-06-05
 
 ### Rolling net-outflow limiter rollover griefing (DEFI-90 added)

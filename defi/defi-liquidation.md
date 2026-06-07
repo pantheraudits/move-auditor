@@ -496,6 +496,61 @@ fun check_self_match(maker_account_id: ID, taker_account_id: ID) {
 
 ---
 
+## DEFI-91 — Check/Settlement Price-Basis Divergence Causes Permanent Liquidation Revert
+
+**Description:** A liquidation (or backstop/ADL/forced-close) routine decides *whether* and *how* to settle a position using one price basis, then *executes* the settlement using a different price basis. The two bases agree most of the time, so an invariant the code treats as "impossible" (e.g. `attribution > 0 ⟹ covered_loss == 0`) holds in testing — but for positions near zero equity the gap between the bases flips the sign of realized PnL, the impossible state is reached, a hard `assert!`/`abort` fires, and the **entire liquidation transaction reverts**. Because the liquidation queue retries the *same* item with the *same* inputs every cycle, the revert is deterministic and the account becomes **permanently unliquidatable** — insolvent positions stay open and accrue unbounded bad debt.
+
+The divergence is almost always one of four things changing between the *check* and the *settle*:
+- **Price basis:** check uses `mark_px` / oracle median / EMA; settle uses last-trade, index, or a tick-rounded price.
+- **Rounding:** settle applies `round_price_to_tick(px, dir)` (floor/ceil to `ticker_size`), which is adverse to the user by up to one tick; the check used the un-rounded price.
+- **Units / decimals:** check works in one scale, settle in another (cross-ref DEFI-37, DEFI-41).
+- **Fees / funding:** check omits a fee or funding term that settlement charges.
+
+**Pattern to flag:**
+```move
+// VULNERABLE — attribution decided on mark, settlement executed on tick-rounded price
+public fun liquidate_single_position(...) {
+    // (1) CHECK — uses mark price
+    let (margin, upnl) = position.margin_and_pnl_with_funding(market);   // mark-based
+    let attribution = track_adl_attribution_for_position(margin, upnl);  // > 0 when margin+uPnL > 0
+
+    // (2) SETTLE — uses a DIFFERENT, strictly-worse price
+    let settle_px = round_price_to_ticker(mark_price, !is_long);         // floor/ceil to tick
+    let covered_loss = clearinghouse_settle(account, market, settle_px); // can be > 0
+
+    // (3) "IMPOSSIBLE" invariant tying the two bases together — reverts the whole tx
+    if (attribution > 0) {
+        assert!(covered_loss == 0, EBACKSTOP_LIQUIDATOR_COVERED_LOSS_NOT_ZERO);  // <-- aborts
+        transfer_amount_to_backstop_liquidator(...);
+    }
+}
+```
+
+**Check:**
+1. **Trace the action end-to-end.** In every liquidation / backstop / ADL / forced-close / settlement path, identify the price (or unit/fee) used to *decide* the branch vs the price used to *execute* the transfer/settle. List both with file:line.
+2. **Are they the same value?** If the check reads `mark_px`/`oracle`/`EMA`/`mid` and settlement reads a `round_*_to_tick`, last-trade, or index price → divergence exists.
+3. **Find the cross-basis invariant.** Look for any `assert!` / `abort` that ties a check-derived quantity to a settle-derived quantity (`attribution > 0 ⟹ covered_loss == 0`, `pnl >= 0 ⟹ no_shortfall`, `healthy ⟹ no_bad_debt`). That assert is the revert trigger.
+4. **Substitute boundary values.** Take a position with `margin + uPnL_at_check ≈ 0⁺` (the typical state of a backstop-liquidatable, near-zero-equity account). Round the settle price one tick against the user. Does realized loss now exceed remaining collateral? If yes → the invariant is violated and the tx aborts.
+5. **Is the failing item retried with identical inputs?** If the liquidation queue re-pops the same request after a revert (no skip/quarantine/partial-progress) → the revert is permanent, not transient → escalate to High/Critical.
+6. **Multi-position drain:** when an account holds several cross-margin positions processed in profitability order, each earlier transfer drains the user's balance, making a *later* small-positive-attribution position more likely to hit the shortfall. Trace the loop, not just one position.
+
+**Impact:** Permanent DoS of the protocol's last-resort liquidation → insolvent positions cannot be closed → unbounded bad debt socialized to LPs/lenders. An attacker can deliberately open positions on coarse-tick markets engineered to wedge in the revert loop while hedging the other side. Severity is typically **High–Critical** because the affected account is permanently unliquidatable.
+
+**Fix:** Make the check and the settlement use the **same** price basis. Recompute attribution/PnL with `settle_price` (the tick-rounded value actually used), so `attribution > 0` genuinely implies `covered_loss == 0` and the assert is correct by construction. If the mark-based figure must be retained for other accounting, **replace the hard `assert!` with a graceful branch** that transfers only what is actually transferable and lets the remainder logic absorb the rest — never let a settlement-time shortfall abort the whole liquidation:
+```move
+if (attribution > 0) {
+    let transferable = if (covered_loss == 0) { (attribution as u64) } else { 0 };
+    if (transferable > 0) {
+        transfer_amount_to_backstop_liquidator(liquidator, account, market, transferable);
+    };
+    // untransferred amount handled by remainder/finalization logic — no abort
+}
+```
+
+**References:** DEFI-37 (decimal mismatch), DEFI-39 (rounding direction), DEFI-41 (time-unit confusion), DEFI-92 (generic check-vs-settle divergence heuristic), DEFI-63/64 (other liquidation-revert DoS classes).
+
+---
+
 ## Liquidation Economics Validation
 
 **Before reporting ANY liquidation finding, answer these questions:**
@@ -537,3 +592,4 @@ fun check_self_match(maker_account_id: ID, taker_account_id: ID) {
 - [ ] Liquidation path checks idle cash availability before redeeming underlying (DEFI-81)
 - [ ] Close factor enforced per-TRANSACTION (cumulative), not per-call — PTB repeated call bypass (DEFI-83)
 - [ ] Self-match protection prevents same-owner cross between margin and normal accounts (DEFI-89)
+- [ ] Liquidation/backstop/ADL decision and settlement use the SAME price basis — no mark-vs-tick-rounded divergence behind a hard `assert!`; failing queue items don't retry forever (DEFI-91)
